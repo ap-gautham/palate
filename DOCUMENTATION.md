@@ -77,14 +77,14 @@ Kaggle CSVs in `data/raw/`:
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cd src
-../.venv/bin/python -m preprocessing.build_dataset
-../.venv/bin/python -m preprocessing.audit
-../.venv/bin/python -m design1_analytic.run
-../.venv/bin/python -m design2_xgboost.train
-../.venv/bin/python -m design3_neural.train
-../.venv/bin/python -m design1_analytic.attribution
-../.venv/bin/python -m app_catalog.export
-../.venv/bin/python -m comparison.analysis
+../.venv/bin/python -m rotten_tomatoes.preprocessing.build_dataset
+../.venv/bin/python -m rotten_tomatoes.preprocessing.audit
+../.venv/bin/python -m rotten_tomatoes.design1_analytic.run
+../.venv/bin/python -m rotten_tomatoes.design2_xgboost.train
+../.venv/bin/python -m rotten_tomatoes.design3_neural.train
+../.venv/bin/python -m rotten_tomatoes.design1_analytic.attribution
+../.venv/bin/python -m rotten_tomatoes.app_catalog.export
+../.venv/bin/python -m rotten_tomatoes.comparison.analysis
 cd ..
 .venv/bin/python -m unittest discover -s tests -v
 ```

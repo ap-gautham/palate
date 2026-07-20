@@ -17,7 +17,7 @@ contract (`main_feature_row`), offline generation from a Split
 import numpy as np
 import pandas as pd
 
-from config import MIN_OTHER_REVIEWERS
+from rotten_tomatoes.config import MIN_OTHER_REVIEWERS
 from .pseudo_users import (iter_paired_episodes, sample_random_holdout,
                            similarity, target_ok_mask)
 

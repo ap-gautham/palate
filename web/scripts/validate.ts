@@ -9,7 +9,7 @@ import type { Catalog, Movie, Critic, MovieRows, XgbModel, NNMeta, NNModel, Mode
 import { predictAll, topCriticMatches } from "../src/lib/predict";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-const DATA = join(SCRIPT_DIR, "..", "public", "data");
+const DATA = join(SCRIPT_DIR, "..", "public", "data", "rotten_tomatoes");
 const readJson = <T,>(name: string): T => JSON.parse(readFileSync(join(DATA, name), "utf-8"));
 const readBuf = (name: string): ArrayBuffer => {
   const b = readFileSync(join(DATA, name));

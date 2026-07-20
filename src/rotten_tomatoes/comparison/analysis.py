@@ -19,7 +19,7 @@ from scipy import stats
 
 import json
 
-from config import FIGURES, TABLES, VALUE_COL
+from rotten_tomatoes.config import FIGURES, TABLES, VALUE_COL
 
 
 def rmse(err):

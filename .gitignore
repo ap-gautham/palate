@@ -4,13 +4,16 @@ __pycache__/
 *.pyc
 .DS_Store
 
-# Data — Kaggle source (not redistributable) and regenerable processed parquets
-data/raw/
-data/processed/
-data/letterboxd/
+# Data — Kaggle source (not redistributable) and regenerable processed parquets.
+# Symmetric layout: each project keeps its own raw/ + processed/.
+data/rotten_tomatoes/raw/
+data/rotten_tomatoes/processed/
+data/letterboxd/raw/
+data/letterboxd/processed/
 
-# Model binaries — regenerable by the pipeline (design2_xgboost.train, design3_neural.train)
-results/models/
+# Model binaries — regenerable by each project's training entry points.
+results/rotten_tomatoes/models/
+results/letterboxd/models/
 
 # Scratch and LaTeX build artifacts
 TRASH/

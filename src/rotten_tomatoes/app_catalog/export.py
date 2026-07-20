@@ -4,7 +4,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from config import DATA_PROCESSED, MODELS, MOVIES_PARQUET, REVIEWS_PARQUET
+from rotten_tomatoes.config import DATA_PROCESSED, MODELS, MOVIES_PARQUET, REVIEWS_PARQUET
 
 N_MOVIES = 1_000
 MODEL_META_FILE = MODELS / "design2_xgboost_meta.json"

@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from config import FIGURES, REVIEWS_PARQUET, SCORE_LEVELS, TABLES
+from rotten_tomatoes.config import FIGURES, REVIEWS_PARQUET, SCORE_LEVELS, TABLES
 
 # dataviz reference palette (validated, light mode)
 BLUE = "#2a78d6"

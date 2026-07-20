@@ -20,7 +20,7 @@ import pandas as pd
 import torch
 from torch import nn
 
-from config import MODELS, MOVIES_PARQUET, REVIEWS_PARQUET, SEED, TABLES, VALUE_COL
+from rotten_tomatoes.config import MODELS, MOVIES_PARQUET, REVIEWS_PARQUET, SEED, TABLES, VALUE_COL
 from . import features as F
 from .network import TabularResNet
 from .pseudo_users import build_split, partition_pseudo_users

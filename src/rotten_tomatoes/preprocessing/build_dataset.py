@@ -14,7 +14,7 @@ import unicodedata
 import numpy as np
 import pandas as pd
 
-from config import (DATA_PROCESSED, MIN_CRITIC_MOVIES, MIN_HISTORY, MOVIES_CSV,
+from rotten_tomatoes.config import (DATA_PROCESSED, MIN_CRITIC_MOVIES, MIN_HISTORY, MOVIES_CSV,
                     MOVIES_PARQUET, REVIEWS_CSV, REVIEWS_PARQUET, SCORE_LEVELS,
                     SEED)
 from .parse_scores import parse_series, standardize_to_levels

@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 
-from config import MODELS, MOVIES_PARQUET, REVIEWS_PARQUET, SEED, TABLES, VALUE_COL
+from rotten_tomatoes.config import MODELS, MOVIES_PARQUET, REVIEWS_PARQUET, SEED, TABLES, VALUE_COL
 from . import features as F
 from .pseudo_users import build_split, partition_pseudo_users, rmse
 

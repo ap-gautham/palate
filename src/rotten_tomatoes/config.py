@@ -1,10 +1,10 @@
 """Central paths and constants for the critic-matched prediction project."""
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-DATA_RAW = ROOT / "data" / "raw"
-DATA_PROCESSED = ROOT / "data" / "processed"
-RESULTS = ROOT / "results"
+ROOT = Path(__file__).resolve().parents[2]
+DATA_RAW = ROOT / "data" / "rotten_tomatoes" / "raw"
+DATA_PROCESSED = ROOT / "data" / "rotten_tomatoes" / "processed"
+RESULTS = ROOT / "results" / "rotten_tomatoes"
 FIGURES = RESULTS / "figures"
 TABLES = RESULTS / "tables"
 MODELS = RESULTS / "models"

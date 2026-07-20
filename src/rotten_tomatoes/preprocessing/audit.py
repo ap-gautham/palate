@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from config import DATA_PROCESSED, MIN_HISTORY, REVIEWS_PARQUET, VALUE_COL, SEED, TABLES
+from rotten_tomatoes.config import DATA_PROCESSED, MIN_HISTORY, REVIEWS_PARQUET, VALUE_COL, SEED, TABLES
 
 
 def main() -> None:

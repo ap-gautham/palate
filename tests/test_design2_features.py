@@ -6,7 +6,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from design2_xgboost.features import MAIN_COLS, FEATURE_COLS, main_feature_row
+from rotten_tomatoes.design2_xgboost.features import MAIN_COLS, FEATURE_COLS, main_feature_row
 
 
 class FeatureContractTests(unittest.TestCase):

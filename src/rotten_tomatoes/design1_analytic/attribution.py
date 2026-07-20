@@ -9,7 +9,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from config import MOVIES_PARQUET, REVIEWS_PARQUET, SEED, TABLES, VALUE_COL
+from rotten_tomatoes.config import MOVIES_PARQUET, REVIEWS_PARQUET, SEED, TABLES, VALUE_COL
 from .analytic import predict_movies, shrink
 from .pseudo_users import (build_split, partition_pseudo_users, rmse,
                            sample_random_holdout, similarity, target_ok_mask)

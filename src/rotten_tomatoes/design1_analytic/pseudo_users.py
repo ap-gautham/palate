@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from config import (EVAL_DRAWS, EVAL_TARGETS_PER_USER, MIN_HISTORY,
+from rotten_tomatoes.config import (EVAL_DRAWS, EVAL_TARGETS_PER_USER, MIN_HISTORY,
                     MIN_OTHER_REVIEWERS, N_GRID, N_MAX_FINITE, SEED, VALUE_COL)
 
 

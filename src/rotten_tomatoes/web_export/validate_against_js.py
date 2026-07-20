@@ -10,15 +10,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
 
-from design1_analytic import predict as d1
-from design2_xgboost import predict as d2
-from design3_neural import predict as d3
+from rotten_tomatoes.design1_analytic import predict as d1
+from rotten_tomatoes.design2_xgboost import predict as d2
+from rotten_tomatoes.design3_neural import predict as d3
 
-DATA = ROOT / "data" / "processed"
-MODELS = ROOT / "results" / "models"
+DATA = ROOT / "data" / "rotten_tomatoes" / "processed"
+MODELS = ROOT / "results" / "rotten_tomatoes" / "models"
 
 js = json.loads((ROOT / "web" / "js_validate_out.json").read_text())
 

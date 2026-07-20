@@ -26,10 +26,10 @@ import numpy as np
 import pandas as pd
 import torch
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-DATA = ROOT / "data" / "processed"
-MODELS = ROOT / "results" / "models"
-OUT = ROOT / "web" / "public" / "data"
+ROOT = Path(__file__).resolve().parents[3]
+DATA = ROOT / "data" / "rotten_tomatoes" / "processed"
+MODELS = ROOT / "results" / "rotten_tomatoes" / "models"
+OUT = ROOT / "web" / "public" / "data" / "rotten_tomatoes"
 
 
 def title_from_slug(movie_id: str) -> str:
@@ -78,7 +78,7 @@ def export_catalog():
     movie_idx.tofile(OUT / "ratings_movie_idx.bin")
     score.tofile(OUT / "ratings_score.bin")
 
-    k_star_path = ROOT / "results" / "tables" / "k_star.json"
+    k_star_path = ROOT / "results" / "rotten_tomatoes" / "tables" / "k_star.json"
     k_shrink = json.loads(k_star_path.read_text())["k_star"] if k_star_path.exists() else 8
     (OUT / "k_shrink.json").write_text(dumps({"kShrink": k_shrink}))
 

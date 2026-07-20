@@ -1,6 +1,6 @@
 import type { Catalog, Movie, Critic, MovieRows, XgbModel, NNMeta, NNModel, Models } from "./types";
 
-const BASE = import.meta.env.BASE_URL + "data/";
+const BASE = import.meta.env.BASE_URL + "data/rotten_tomatoes/";
 
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(BASE + path);

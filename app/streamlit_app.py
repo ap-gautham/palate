@@ -22,17 +22,17 @@ import streamlit as st
 import xgboost as xgb
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "data" / "processed"
-MODELS = ROOT / "results" / "models"
+DATA = ROOT / "data" / "rotten_tomatoes" / "processed"
+MODELS = ROOT / "results" / "rotten_tomatoes" / "models"
 sys.path.insert(0, str(ROOT / "src"))
 
-from design1_analytic import predict as d1
-from design2_xgboost import predict as d2
-from design3_neural import predict as d3
+from rotten_tomatoes.design1_analytic import predict as d1
+from rotten_tomatoes.design2_xgboost import predict as d2
+from rotten_tomatoes.design3_neural import predict as d3
 
 XGB_PATH = MODELS / "design2_xgboost.json"
 NN_PATH = MODELS / "design3_mlp.pt"
-K_STAR_PATH = ROOT / "results" / "tables" / "k_star.json"
+K_STAR_PATH = ROOT / "results" / "rotten_tomatoes" / "tables" / "k_star.json"
 LB_DATA = ROOT / "data" / "letterboxd" / "processed"
 LB_MODELS = ROOT / "results" / "letterboxd" / "models"
 LB_XGB_PATH = LB_MODELS / "letterboxd_xgboost.json"

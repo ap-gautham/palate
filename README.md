@@ -273,7 +273,7 @@ critics appear in them). A sort control orders the search lists alphabetically
 
 Model artifacts are `results/models/design2_xgboost.json` and `design3_mlp.pt`;
 each design's app inference lives in its own `predict.py`. To rebuild the web
-app after retraining a model: `cd src && python -m web_export.export && cd
+app after retraining a model: `cd src && python -m rotten_tomatoes.web_export.export && cd
 ../web && npm install && npm run build` (writes into `docs/`).
 
 ## Reproduce
@@ -283,9 +283,9 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 # Place the Kaggle CSVs in data/raw/.
 cd src
-for m in preprocessing.build_dataset preprocessing.audit design1_analytic.run \
-         design2_xgboost.train design3_neural.train design1_analytic.attribution \
-         app_catalog.export comparison.analysis; do
+for m in rotten_tomatoes.preprocessing.build_dataset rotten_tomatoes.preprocessing.audit rotten_tomatoes.design1_analytic.run \
+         rotten_tomatoes.design2_xgboost.train rotten_tomatoes.design3_neural.train rotten_tomatoes.design1_analytic.attribution \
+         rotten_tomatoes.app_catalog.export rotten_tomatoes.comparison.analysis; do
   ../.venv/bin/python -m "$m"
 done
 cd ..
