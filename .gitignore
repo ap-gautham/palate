@@ -16,3 +16,7 @@ TRASH/
 report/*.aux
 report/*.log
 report/*.out
+
+# Web app -- node_modules and validation scratch; docs/ (the built site) is committed
+web/node_modules/
+web/js_validate_out.json

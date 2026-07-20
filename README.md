@@ -190,13 +190,28 @@ high-disagreement films (XGBoost +5.1%, neural net +4.8% there).
 
 ## Website
 
+Live at **[ap-gautham.github.io/palate](https://ap-gautham.github.io/palate/)**,
+built with Vite + React + TypeScript (`web/`) and hosted as a static GitHub
+Pages site from `docs/` -- no server. All three models run **client-side in
+the browser**: the analytic formula is plain arithmetic, the XGBoost model is
+a from-scratch JSON tree-walker (`web/src/lib/xgboost.ts`), and the neural
+net is a hand-written forward pass (`web/src/lib/neuralnet.ts`) over the
+ensemble's raw weights, exported by `src/web_export/export.py`. The port is
+checked against the Python `predict.py` outputs in `web/scripts/validate.ts`
+(the analytic formula matches to float precision; the trained models agree to
+within ~0.02 on the 0-5 scale, from an unstable-sort tie-break -- see the
+comment in `web/src/lib/features.ts`).
+
+A separate Streamlit app (`app/streamlit_app.py`) reproduces the same UI
+against the original Python inference code, for local use:
+
 ```bash
 .venv/bin/streamlit run app/streamlit_app.py
 ```
 
-The app catalog holds the **1,000 most-reviewed movies** (3,387 critics appear
-in them). A sort control orders the search lists alphabetically (default), by
-year, or by most reviewed. It has three sections:
+Both apps hold the same catalog of the **1,000 most-reviewed movies** (3,387
+critics appear in them). A sort control orders the search lists alphabetically
+(default), by year, or by most reviewed. Both have three sections:
 
 1. **Films you have seen** -- a search box adds a film to a table; each row has
    a five-star widget (click a star, it and all before it light up gold, and
@@ -212,7 +227,9 @@ year, or by most reviewed. It has three sections:
    stars change.
 
 Model artifacts are `results/models/design2_xgboost.json` and `design3_mlp.pt`;
-each design's app inference lives in its own `predict.py`.
+each design's app inference lives in its own `predict.py`. To rebuild the web
+app after retraining a model: `cd src && python -m web_export.export && cd
+../web && npm install && npm run build` (writes into `docs/`).
 
 ## Reproduce
 
