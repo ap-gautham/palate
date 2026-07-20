@@ -1,0 +1,18 @@
+{
+  "model": "xgboost",
+  "rating_scale": [
+    1.0,
+    10.0
+  ],
+  "feature_columns": [
+    "user_mean",
+    "user_count",
+    "movie_mean",
+    "movie_std",
+    "movie_count"
+  ],
+  "train_episodes": 5962,
+  "test_episodes": 1435,
+  "rmse": 1.6278050917420852,
+  "best_iteration": 61
+}

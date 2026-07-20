@@ -4,6 +4,31 @@ This document describes the current all-time random-holdout implementation.
 [movie_rec_engine_brief.md](movie_rec_engine_brief.md) is historical planning
 context; it contains superseded temporal and aggregation proposals.
 
+> **Two parallel projects.** The original sections below document the
+> Rotten Tomatoes critic project. The repository now also contains a separate
+> Letterboxd member-rating project at `src/letterboxd/`. It uses the same
+> three-design vocabulary, held-out-rating discipline, sparse neighbourhood
+> idea, and app flow, but it does not mix data, model artifacts, or score
+> scales with RT. See [`src/letterboxd/README.md`](src/letterboxd/README.md)
+> for the Letterboxd-specific contract, commands, metrics, and caveats.
+
+## Parallel-project comparison
+
+| Concern | Rotten Tomatoes | Letterboxd |
+|---|---|---|
+| Source | critic reviews | community member ratings |
+| Native target | heterogeneous source scores -> 0–5 | native integer 1–10 |
+| Processed data | `data/processed/` | `data/letterboxd/processed/` |
+| Results | `results/tables/`, `results/models/` | `results/letterboxd/` |
+| Design 1 | analytic critic match | analytic member match |
+| Design 2 | 38-feature XGBoost | 5-feature XGBoost baseline |
+| Design 3 | trained residual MLP ensemble | written but intentionally untrained |
+| Interactive UI | Critic Match | Community Match — Letterboxd |
+
+RMSE values must be interpreted within a project because the outcome scales,
+sources, and current evaluation episode counts differ. The UI keeps the
+workflows visually parallel while making those differences explicit.
+
 ## 1. Reproduction and Layout
 
 Each of the three designs lives in its **own self-contained package** under

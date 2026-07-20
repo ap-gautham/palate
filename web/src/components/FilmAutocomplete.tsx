@@ -19,7 +19,9 @@ export function FilmAutocomplete({ placeholder, orderedIdxs, movies, excluded, o
     const q = query.trim().toLowerCase();
     const candidates = orderedIdxs.filter((i) => !excluded.has(i));
     const filtered = q ? candidates.filter((i) => movies[i].title.toLowerCase().includes(q)) : candidates;
-    return filtered.slice(0, 8);
+    // Keep the entire matching catalog available. The list itself is bounded
+    // visually and scrolls, so popular title searches are not silently cut off.
+    return filtered;
   }, [query, orderedIdxs, excluded, movies]);
 
   function choose(idx: number) {

@@ -7,6 +7,7 @@ __pycache__/
 # Data — Kaggle source (not redistributable) and regenerable processed parquets
 data/raw/
 data/processed/
+data/letterboxd/
 
 # Model binaries — regenerable by the pipeline (design2_xgboost.train, design3_neural.train)
 results/models/

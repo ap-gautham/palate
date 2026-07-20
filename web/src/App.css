@@ -29,7 +29,7 @@ button { font: inherit; }
   max-width: 900px; margin: 0 auto; padding: 14px 22px; display: flex;
   align-items: center; justify-content: space-between;
 }
-.brand { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.02em; }
+.brand { font: inherit; font-size: 1.5rem; font-weight: 800; letter-spacing: -0.02em; border: 0; background: transparent; color: var(--ink); cursor: pointer; padding: 0; }
 .brand .dot { color: var(--gold); }
 .tabs { display: flex; gap: 6px; }
 .tab {
@@ -37,6 +37,14 @@ button { font: inherit; }
   padding: 7px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.92rem;
 }
 .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.project-switcher { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding-top: 24px; }
+.project-switcher > span { color: var(--muted); font-size: .88rem; font-weight: 600; margin-right: 4px; }
+.project-switcher button { border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 5px 10px; border-radius: 999px; cursor: pointer; font-size: .88rem; }
+.project-switcher button.active { color: #fff; background: var(--violet); border-color: var(--violet); }
+.project-pending { max-width: 700px; padding: 42px 0; }
+.project-pending h1 { font-size: 1.55rem; margin: 0 0 8px; }
+.project-pending code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+.project-results { margin-bottom: 22px; }
 
 /* ---- loading ---- */
 .loading-screen { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 100px 0; color: var(--muted); }

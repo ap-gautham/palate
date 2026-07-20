@@ -1,5 +1,50 @@
 # Critic-Matched Movie Prediction
 
+## Letterboxd community-rating project
+
+The repository contains two intentionally isolated, visually parallel movie
+prediction projects. Rotten Tomatoes predicts a critic-like 0–5 score from
+professional reviews; Letterboxd predicts a member-like 1–10 score from other
+members. They never share raw data, processed parquet files, or trained model
+artifacts.
+
+| | Rotten Tomatoes | Letterboxd |
+|---|---|---|
+| rater population | professional critics | Letterboxd members |
+| target scale | parsed to 0–5 | native 1–10 |
+| Design 1 | analytic critic match | analytic member match |
+| Design 2 | 38-feature XGBoost | member/movie-statistic XGBoost |
+| Design 3 | trained neural ensemble | code present, intentionally untrained |
+| interactive catalog | 1,000 popular films | 1,000 popular films in Streamlit |
+
+Download `ratings_export.csv` and `movie_data.csv` from the supplied Kaggle
+dataset into `data/letterboxd/raw/`, then run from `src/`:
+
+```bash
+python -m letterboxd.preprocess
+python -m letterboxd.train_analytic
+python -m letterboxd.train_xgboost
+python -m letterboxd.train_neural  # prints a deliberate no-training message
+```
+
+The downloaded export yielded 11,078,045 ratings from 7,420 members with at
+least five ratings across 286,069 films. The requested 100k, 1M, and 10M scale
+checks all complete in under 30 seconds but resolve to that complete local
+population—the source has fewer eligible members than the smallest cap.
+
+Current Letterboxd artifacts are isolated in `results/letterboxd/`: Design 1
+records a 1.695 RMSE on 300 deterministic held-out member profiles with 50 seen
+films; Design 2 records a 1.628 RMSE on 1,435 member-disjoint held-out ratings.
+Those numbers are not directly comparable to RT RMSE because Letterboxd uses a
+1–10 target and a different evaluation population. The Streamlit app has a
+project selector and a fully interactive 1–10 Letterboxd catalog. The static
+website has the matching project selector, methodology, and current results;
+its existing browser prediction engine remains RT-only until a compact
+Letterboxd browser export is added.
+
+For the full project-specific workflow and leakage notes, see
+[`src/letterboxd/README.md`](src/letterboxd/README.md).
+
 This project predicts a user's standardized 0-5 movie rating from professional
 critic scores. It offers three designs: an explicit movie-mean-centered
 analytic formula, a saved XGBoost model, and a saved neural network, both
