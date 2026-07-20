@@ -1,16 +1,17 @@
 import { useMemo, useState, useRef } from "react";
-import type { Movie } from "../lib/types";
 
-interface Props {
+interface Props<M extends { title: string }> {
   placeholder: string;
   orderedIdxs: number[];
-  movies: Movie[];
+  movies: M[];
   excluded: Set<number>;
   onAdd: (idx: number) => void;
-  label: (m: Movie) => string;
+  label: (m: M) => string;
 }
 
-export function FilmAutocomplete({ placeholder, orderedIdxs, movies, excluded, onAdd, label }: Props) {
+export function FilmAutocomplete<M extends { title: string }>({
+  placeholder, orderedIdxs, movies, excluded, onAdd, label,
+}: Props<M>) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);

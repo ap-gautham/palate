@@ -148,6 +148,18 @@ button { font: inherit; }
 .star { border: none; background: none; cursor: pointer; font-size: 1.2rem; color: var(--line); padding: 0 1px; line-height: 1; }
 .star.filled { color: var(--gold); }
 
+.rating-input { display: inline-flex; align-items: center; gap: 4px; }
+.rating-step {
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  width: 24px; height: 24px; border-radius: 6px; cursor: pointer; font-size: 0.95rem; line-height: 1;
+}
+.rating-step:disabled { opacity: 0.35; cursor: default; }
+.rating-step:not(:disabled):hover { border-color: var(--violet); color: var(--violet); }
+.rating-number {
+  width: 46px; text-align: center; padding: 3px 4px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 0.92rem;
+}
+
 .score-pill { color: var(--gold); font-weight: 700; font-size: 1.02rem; }
 
 .info-box, .warn-box {

@@ -122,10 +122,16 @@ function forwardOne(model: NNModel, member: Float32Array, numeric: Float32Array,
   return out[0];
 }
 
-export function predictNeuralNet(model: NNModel, row: Record<string, number>): number {
+/** `range` defaults to the Rotten Tomatoes 0-5 scale; pass [1,10] for
+ * Letterboxd. */
+export function predictNeuralNet(
+  model: NNModel,
+  row: Record<string, number>,
+  range: [number, number] = [0, 5]
+): number {
   const numeric = prepareNumeric(model, row);
   const genreId = row.genre_id;
   let sum = 0;
   for (const member of model.members) sum += forwardOne(model, member, numeric, genreId);
-  return clamp(sum / model.members.length, 0, 5);
+  return clamp(sum / model.members.length, range[0], range[1]);
 }

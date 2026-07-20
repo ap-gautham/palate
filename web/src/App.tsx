@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useAppData } from "./lib/useAppData";
+import { useLetterboxdData } from "./lib/letterboxd/useLetterboxdData";
 import { About } from "./pages/About";
 import { PredictApp } from "./pages/PredictApp";
+import { LetterboxdApp } from "./pages/LetterboxdApp";
 import "./App.css";
 
 type Tab = "about" | "app";
@@ -63,26 +65,25 @@ export default function App() {
 }
 
 function LetterboxdTab() {
-  return (
-    <section className="project-pending">
-      <p className="kicker">Letterboxd project</p>
-      <h1>Community ratings on a 1–10 scale</h1>
-      <p>
-        This is a separate recommendation pipeline: Letterboxd members replace critics, and half-star ratings are
-        represented directly on a 1–10 scale. The downloaded export contains 7,420 eligible members, 286,069 films,
-        and 11.08 million ratings after the five-rating quality floor.
-      </p>
-      <div className="cards project-results">
-        <div className="card d1"><h3>Design 1: analytic</h3><span className="n">1.695</span><p>RMSE, 300 deterministic held-out profiles with 50 seen films.</p></div>
-        <div className="card d2"><h3>Design 2: XGBoost</h3><span className="n">1.628</span><p>RMSE on 1,435 member-disjoint held-out ratings.</p></div>
-        <div className="card d3"><h3>Design 3: neural net</h3><span className="n">Not trained</span><p>The architecture is written but intentionally has not been run.</p></div>
+  // Only fetches the ~60MB Letterboxd export once this tab actually mounts
+  // (i.e. the user has switched the dataset to Letterboxd).
+  const state = useLetterboxdData(true);
+  if (state.status === "loading") {
+    return (
+      <div className="loading-screen">
+        <div className="spinner" />
+        <p>{state.progress}</p>
       </div>
-      <p className="info-box">
-        The analysis uses the full local rating matrix. An interactive browser catalog needs a separate compact export
-        of these Letterboxd assets, so Rotten Tomatoes remains the live interactive demo for now.
-      </p>
-    </section>
-  );
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <div className="loading-screen">
+        <p className="warn-box">Failed to load: {state.message}</p>
+      </div>
+    );
+  }
+  return <LetterboxdApp data={state.data} />;
 }
 
 function AppTab({ state }: { state: ReturnType<typeof useAppData> }) {

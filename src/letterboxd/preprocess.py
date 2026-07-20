@@ -76,7 +76,8 @@ def load_movies() -> pd.DataFrame:
     header = pd.read_csv(MOVIES_CSV, nrows=0)
     movie_col = column(list(header), "movie_id", "movieid", "id", "film_id")
     title_col = column(list(header), "title", "name", "film_name", "movie_name", "movie_title")
-    year_col = next((c for c in header if str(c).casefold() in {"year", "release_year", "releaseyear"}), None)
+    year_col = next((c for c in header if str(c).casefold()
+                     in {"year", "release_year", "releaseyear", "year_released", "yearreleased"}), None)
     genre_col = next((c for c in header if "genre" in str(c).casefold()), None)
     # The Kaggle movie export contains unusually long overview text; Python's
     # CSV parser avoids the C parser's buffer-overflow failure on this file.
