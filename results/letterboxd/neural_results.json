@@ -1,0 +1,11 @@
+{
+  "model": "residual_mlp",
+  "rating_scale": [
+    1.0,
+    10.0
+  ],
+  "ensemble_size": 3,
+  "test_rows": 16290,
+  "rmse": 1.5926678163160524,
+  "mean_member_val_rmse": 1.671707272529602
+}

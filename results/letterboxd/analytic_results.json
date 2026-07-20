@@ -1,9 +1,0 @@
-{
-  "model": "analytic_neighbourhood",
-  "rating_scale": [
-    1.0,
-    10.0
-  ],
-  "test_episodes": 7420,
-  "rmse": 1.6637745613253014
-}
