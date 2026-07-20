@@ -29,6 +29,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from rotten_tomatoes.design1_analytic import predict as d1
 from rotten_tomatoes.design2_xgboost import predict as d2
 from rotten_tomatoes.design3_neural import predict as d3
+from letterboxd import features as lbf
+from letterboxd.analyze import load_nn as lb_load_nn, nn_predict as lb_nn_predict
 
 XGB_PATH = MODELS / "design2_xgboost.json"
 NN_PATH = MODELS / "design3_mlp.pt"
@@ -45,17 +47,38 @@ GOLD = {1: "#c9a24a", 2: "#d8a838", 3: "#e8ab20", 4: "#f4ae0c", 5: "#ffbf00"}
 st.set_page_config(page_title="Critic Match", page_icon="🎬", layout="wide")
 
 
+def mse(pred, truth) -> float:
+    pred, truth = np.asarray(pred, float), np.asarray(truth, float)
+    ok = np.isfinite(pred) & np.isfinite(truth)
+    return float(np.mean((pred[ok] - truth[ok]) ** 2)) if ok.any() else float("nan")
+
+
+LB_MIN_OVERLAP = lbf.MIN_APP_OVERLAP
+
+
 @st.cache_data
 def load_letterboxd_catalog():
-    """A 1,000-film interactive slice backed by the full processed matrix."""
-    ratings = pd.read_parquet(LB_DATA / "ratings_1_to_10.parquet")
-    popularity = ratings.groupby("movie_id").size().nlargest(1_000)
-    ratings = ratings[ratings["movie_id"].isin(popularity.index)].copy()
-    movies = pd.read_parquet(LB_DATA / "movies.parquet").drop_duplicates("movie_id").set_index("movie_id")
-    meta = movies.reindex(popularity.index)[["title", "year"]].copy()
+    """A 1,000-film interactive slice backed by the full processed matrix.
+
+    `members` carries each member's ALL-TIME rating_sum/rating_count (not
+    restricted to the 1,000-film catalog), matching the leave-one-out peer
+    mean the models were trained on -- the same convention as RT's
+    demo_critics.parquet.
+    """
+    ratings_full = pd.read_parquet(LB_DATA / "ratings_1_to_10.parquet")
+    popularity = ratings_full.groupby("movie_id").size().nlargest(1_000)
+    scores = ratings_full[ratings_full["movie_id"].isin(popularity.index)].copy()
+    movies_full = pd.read_parquet(LB_DATA / "movies.parquet")
+    movie_genre, _, unknown_genre_id = lbf.make_genre_maps(movies_full)
+    movies_meta = movies_full.drop_duplicates("movie_id").set_index("movie_id")
+    meta = movies_meta.reindex(popularity.index)[["title", "year"]].copy()
     meta["n_scores"] = popularity
     meta["title"] = meta["title"].fillna(meta.index.to_series())
-    return ratings, meta
+    member_ids = pd.Index(scores["user_id"].drop_duplicates())
+    members = (ratings_full[ratings_full["user_id"].isin(member_ids)]
+               .groupby("user_id")["rating"].agg(["sum", "size"])
+               .rename(columns={"sum": "rating_sum", "size": "rating_count"}))
+    return scores, meta, members, movie_genre, unknown_genre_id
 
 
 @st.cache_resource
@@ -67,37 +90,37 @@ def load_letterboxd_xgb():
     return model
 
 
-def lb_matches(scores: pd.DataFrame, user: pd.Series, k_shrink: int = 8) -> pd.DataFrame:
-    """Same shrunk Pearson + magnitude contract as RT Design 1."""
-    overlap = scores[scores["movie_id"].isin(user.index)].copy()
-    overlap["user_rating"] = overlap["movie_id"].map(user)
-    grouped = overlap.groupby("user_id")
-    out = grouped.agg(overlap=("rating", "size"), sx=("user_rating", "sum"),
-                      sy=("rating", "sum"), sxx=("user_rating", lambda x: float(np.dot(x, x))),
-                      syy=("rating", lambda x: float(np.dot(x, x))),
-                      sxy=("rating", lambda x: 0.0))
-    # Dot products require aligned columns, so compute them before aggregation.
-    overlap["xy"] = overlap["user_rating"] * overlap["rating"]
-    out["sxy"] = overlap.groupby("user_id")["xy"].sum()
-    n = out["overlap"].to_numpy(float)
-    cov = out["sxy"].to_numpy() - out["sx"].to_numpy() * out["sy"].to_numpy() / n
-    vx = out["sxx"].to_numpy() - out["sx"].to_numpy() ** 2 / n
-    vy = out["syy"].to_numpy() - out["sy"].to_numpy() ** 2 / n
-    corr = np.divide(cov, np.sqrt(vx * vy), out=np.zeros_like(cov), where=(n >= 2) & (vx > 1e-9) & (vy > 1e-9))
-    out["sim"] = corr * np.minimum(n, k_shrink) / k_shrink
-    out["mag_sim"] = np.divide(out["sxy"], out["syy"], out=np.ones(len(out)), where=out["syy"] > 1e-12)
-    return out[["overlap", "sim", "mag_sim"]]
+@st.cache_resource
+def load_letterboxd_nn():
+    return lb_load_nn()
+
+
+def lb_analytic(target_scores: pd.DataFrame, matches: pd.DataFrame):
+    """Movie-mean-centered, magnitude-scaled analytic prediction, clipped to
+    [1, 10] -- the same formula as RT Design 1. Returns {movie_id: (pred, mean)}."""
+    out = {}
+    for mid, group in target_scores.groupby("movie_id"):
+        sim = group["user_id"].map(matches["sim"]).fillna(0.0)
+        mag = group["user_id"].map(matches["mag_sim"]).fillna(1.0)
+        mean = group["rating"].mean()
+        weight = sim.abs()
+        num = ((weight * mean + sim * (group["rating"] - mean)) * mag).sum()
+        pred = mean if weight.sum() == 0 else float(num / weight.sum())
+        out[mid] = (float(np.clip(pred, 1, 10)), float(mean))
+    return out
 
 
 def run_letterboxd_app():
     if not (LB_DATA / "ratings_1_to_10.parquet").exists():
         st.error("Letterboxd data is not available. Run `python -m letterboxd.preprocess` first.")
         return
-    scores, meta = load_letterboxd_catalog()
-    model = load_letterboxd_xgb()
+    scores, meta, members, movie_genre, unknown_genre_id = load_letterboxd_catalog()
+    xgb_model = load_letterboxd_xgb()
+    nn_ckpt = load_letterboxd_nn()
     st.title("🎬 Community Match — Letterboxd")
-    st.caption("The same three-design workflow as Rotten Tomatoes, using direct 1–10 member ratings. "
-               "Design 3 is intentionally shown as untrained.")
+    st.caption("The same three-design workflow as Rotten Tomatoes -- an analytic member-match formula, "
+               "an XGBoost model, and a neural network -- trained on direct 1–10 member ratings instead "
+               "of critic pseudo-users, over the same 37-feature similarity-decile contract (no Tomatometer).")
     st.info("Full analysis: 7,420 members · 286,069 films · 11.08M ratings. The interactive catalog contains the 1,000 most-rated films.")
     label = {mid: f"{row.title} ({int(row.year) if pd.notna(row.year) else 'n/a'})" for mid, row in meta.iterrows()}
     sort = st.radio("Sort the search list by", ["Title (A–Z)", "Year (newest first)", "Most rated"], horizontal=True, key="lb_sort")
@@ -110,7 +133,7 @@ def run_letterboxd_app():
         mid = st.session_state.get(f"{which}_add")
         if mid and mid not in st.session_state["lb_seen"] and mid not in st.session_state["lb_predict"]:
             st.session_state[which].append(mid)
-            if which == "lb_seen": st.session_state[f"lb_rating_{mid}"] = 5
+            if which == "lb_seen": st.session_state[f"lb_rating_{mid}"] = 6
     def chooser(which, heading):
         st.subheader(heading)
         chosen = set(st.session_state["lb_seen"]) | set(st.session_state["lb_predict"])
@@ -119,45 +142,89 @@ def run_letterboxd_app():
             cols = st.columns([.6, 5, 2, 1])
             cols[0].button("✕", key=f"lb_rm_{which}_{mid}", on_click=lambda w=which, m=mid: st.session_state[w].remove(m))
             cols[1].write(label[mid])
-            cols[2].number_input("Your rating", min_value=1, max_value=10, value=int(st.session_state.get(f"lb_rating_{mid}", 5)), step=1, key=f"lb_rating_{mid}", label_visibility="collapsed")
+            cols[2].number_input("Your rating", min_value=1, max_value=10, value=int(st.session_state.get(f"lb_rating_{mid}", 6)), step=1, key=f"lb_rating_{mid}", label_visibility="collapsed")
             cols[3].markdown(f"**{st.session_state.get(f'lb_rating_{mid}', '—')}/10**" if f"lb_rating_{mid}" in st.session_state else "not rated")
     chooser("lb_seen", "1. Films you have seen")
     chooser("lb_predict", "2. Films to predict")
     st.subheader("3. Predictions")
     user = pd.Series({mid: st.session_state[f"lb_rating_{mid}"] for mid in st.session_state["lb_seen"]}, dtype=float)
     targets = st.session_state["lb_predict"]
-    if len(user) < MIN_SEEN: st.info(f"Rate at least {MIN_SEEN} seen films (currently {len(user)}).")
-    elif user.std() < 1e-9: st.warning("Give your seen films different ratings so similarity is defined.")
-    elif not targets: st.info("Add at least one film to predict.")
+    if len(user) < MIN_SEEN:
+        st.info(f"Rate at least {MIN_SEEN} seen films to build a taste profile (currently {len(user)}).")
+    elif user.std() < 1e-9:
+        st.warning("Give your seen films different ratings so similarity is defined.")
+    elif not targets:
+        st.info("Add at least one film to predict in section 2.")
     else:
-        matches = lb_matches(scores, user)
-        rows = []
-        for mid in targets:
-            peer = scores[scores.movie_id == mid].join(matches, on="user_id")
-            mean, std, count = peer.rating.mean(), peer.rating.std(ddof=0), len(peer)
-            weight = peer.sim.abs().fillna(0)
-            analytic = mean if weight.sum() == 0 else float((((weight * mean + peer.sim.fillna(0) * (peer.rating - mean)) * peer.mag_sim.fillna(1)).sum()) / weight.sum())
-            xgb_pred = np.nan
-            if model is not None:
-                features = pd.DataFrame([[user.mean(), len(user), mean, std, count]], columns=["user_mean", "user_count", "movie_mean", "movie_std", "movie_count"])
-                xgb_pred = float(np.clip(model.predict(xgb.DMatrix(features))[0], 1, 10))
-            rows.append({"Film": label[mid], "Analytic": round(float(np.clip(analytic, 1, 10)), 2), "XGBoost": round(xgb_pred, 2), "Neural net": "Not trained", "Consensus (mean)": round(mean, 2), "Your score": st.session_state.get(f"lb_rating_{mid}")})
-        table = pd.DataFrame(rows).set_index("Film")
-        if table["Your score"].isna().all(): table = table.drop(columns="Your score")
+        target_scores = scores[scores["movie_id"].isin(targets)]
+        matches = lbf.app_similarity(scores, user, lbf.K_SHRINK)
+        analytic = lb_analytic(target_scores, matches)
+        feats, feat_ids = lbf.app_features(target_scores, matches, members, user,
+                                           movie_genre, unknown_genre_id)
+        feats = feats[lbf.FEATURE_COLS]
+        xgb_pred = (pd.Series(np.clip(xgb_model.predict(xgb.DMatrix(feats)), 1, 10), index=feat_ids)
+                    if xgb_model is not None else pd.Series(np.nan, index=feat_ids))
+        nn_pred = (pd.Series(lb_nn_predict(nn_ckpt, feats), index=feat_ids)
+                   if nn_ckpt is not None else pd.Series(np.nan, index=feat_ids))
+        means = pd.Series({mid: analytic.get(mid, (np.nan, np.nan))[1] for mid in targets})
+        formula = pd.Series({mid: analytic.get(mid, (np.nan, np.nan))[0] for mid in targets})
+        your = pd.Series({mid: st.session_state.get(f"lb_rating_{mid}") for mid in targets}, dtype=float)
+
+        table = pd.DataFrame({
+            "Film": [label[m] for m in targets],
+            "Analytic": formula.reindex(targets).round(2).values,
+            "XGBoost": xgb_pred.reindex(targets).round(2).values,
+            "Neural net": nn_pred.reindex(targets).round(2).values,
+            "Consensus (mean)": means.reindex(targets).round(2).values,
+            "Your score": your.reindex(targets).values,
+        }).set_index("Film")
+        if your.notna().sum() == 0:
+            table = table.drop(columns=["Your score"])
         st.dataframe(table, width="stretch")
-        st.caption("Design 1 uses the same shrunken Pearson/magnitude formula as Rotten Tomatoes. Design 2 uses the separately trained Letterboxd XGBoost model; Design 3 is deliberately untrained.")
+        st.caption("Design 1 uses the same shrunken Pearson/magnitude formula as Rotten Tomatoes; Design 2 "
+                   "(XGBoost) and Design 3 (neural net) are separately trained on member ratings over the "
+                   "same 37-feature similarity-decile contract (no Tomatometer).")
+
+        truth = your.reindex(targets).to_numpy()
+        n_scored = int(np.isfinite(truth).sum())
+        st.subheader("Which method predicts *you* best?")
+        if n_scored == 0:
+            st.info("Rate one or more of your predict films (section 2) to see the "
+                    "mean squared error of each method against your own score.")
+        else:
+            candidates = [
+                ("Analytic formula", formula.reindex(targets)),
+                ("XGBoost", xgb_pred.reindex(targets)),
+                ("Neural net", nn_pred.reindex(targets)),
+                ("Consensus mean", means.reindex(targets)),
+            ]
+            rows = [(name, mse(series.to_numpy(), truth)) for name, series in candidates]
+            best = min(rows, key=lambda r: r[1] if np.isfinite(r[1]) else np.inf)[0]
+            st.caption(f"MSE against your own score over {n_scored} rated film(s). "
+                       f"Lower is closer to your taste — **{best}** is closest here.")
+            mse_cols = st.columns(len(rows))
+            for col, (name, value) in zip(mse_cols, rows):
+                col.metric(f"{name}{' ✅' if name == best else ''}",
+                           f"{value:.3f}" if np.isfinite(value) else "—")
+
+        with st.expander("Your closest members"):
+            visible = matches[(matches["overlap"] >= LB_MIN_OVERLAP) & (matches["sim"] != 0)]
+            top = visible.sort_values("sim", ascending=False).head(12)
+            if top.empty:
+                st.write("No overlapping member yet; predictions fall back to consensus.")
+            else:
+                st.dataframe(pd.DataFrame({
+                    "Member": top.index,
+                    "Alignment": top["sim"].round(2),
+                    "Scale match": top["mag_sim"].round(2),
+                    "Films in common": top["overlap"],
+                }).set_index("Member"), width="stretch")
 
 
 dataset = st.sidebar.radio("Project", ["Rotten Tomatoes", "Letterboxd"], index=0)
 if dataset == "Letterboxd":
     run_letterboxd_app()
     st.stop()
-
-
-def mse(pred, truth) -> float:
-    pred, truth = np.asarray(pred, float), np.asarray(truth, float)
-    ok = np.isfinite(pred) & np.isfinite(truth)
-    return float(np.mean((pred[ok] - truth[ok]) ** 2)) if ok.any() else float("nan")
 
 
 @st.cache_data

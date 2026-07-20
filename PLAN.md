@@ -14,7 +14,25 @@
 >   `results/letterboxd/` (nsweep_summary.csv, model_summary.csv,
 >   cross_dataset_comparison.csv, figures/plotA_rmse_vs_n.png,
 >   figures/score_distributions.png).
-> - ⏳ **Phases 2–6**: not started (paused here per request).
+> - ✅ **Phase 2 — Letterboxd interactive browser demo**: complete.
+>   `letterboxd/web_export.py` exports the top-1000 submatrix + both models to
+>   `web/public/data/letterboxd/`; all three designs ported to TypeScript under
+>   `web/src/lib/letterboxd/`, reusing the now-parameterized `xgboost.ts`/
+>   `neuralnet.ts` (clamp range [1,10]). `LetterboxdApp.tsx` replaces the old
+>   static panel — live in the project switcher, verified end-to-end with
+>   headless Chrome (ratings → live 3-design predictions, MSE-vs-you, closest
+>   members). JS↔Python parity confirmed (analytic ~1e-7, XGBoost/NN within
+>   ~0.01–0.05 on the 1–10 scale). RT test suite and RT parity unaffected.
+> - ✅ **Phase 3 — Streamlit parity**: complete. `run_letterboxd_app` now uses
+>   the shared `letterboxd.features` module (37-feature contract) for both
+>   XGBoost and the trained neural net (via `letterboxd.analyze.load_nn`/
+>   `nn_predict`), reusing the exact analytic formula. Added the "Which method
+>   predicts you best?" MSE-vs-you block and a "Your closest members" expander,
+>   mirroring RT. All "untrained"/"Not trained" language removed. Verified
+>   end-to-end with headless Chrome: rating films across both Rotten Tomatoes
+>   and Letterboxd tabs produces live 3-design predictions, correct MSE-vs-you
+>   winner, and a populated closest-members table.
+> - ⏳ **Phases 4–6**: not started.
 
 ## Context
 
