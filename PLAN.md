@@ -46,7 +46,15 @@
 >   with LB cards, plot, and the honest cross-dataset callout — verified via
 >   screenshot. Repo-wide sweep confirms no remaining "untrained" language or
 >   stale 1.695/1.628 numbers.
-> - ⏳ **Phase 6**: not started (final build/verify/ship).
+> - ✅ **Phase 6 — build, verify, ship**: complete. Both TS parity harnesses
+>   (`validate.ts`, `validate_letterboxd.ts`) and their Python counterparts pass
+>   (analytic ~1e-7–1e-15, XGBoost/NN within ~0.01–0.03 on their respective
+>   scales). RT unit test suite: 6/6 pass. Production build clean
+>   (`docs/data/{rotten_tomatoes,letterboxd}/` both present, all key assets
+>   verified reachable at the exact `/palate/` GitHub Pages path). Headless
+>   Chrome check across About, the app tab, and the Letterboxd switch: zero
+>   console errors. All 6 phase commits pushed to `main`; GitHub Pages
+>   redeploys from `docs/`.
 
 ## Context
 
