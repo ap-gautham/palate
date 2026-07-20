@@ -1,49 +1,91 @@
 # Critic-Matched Movie Prediction
 
-## Letterboxd community-rating project
+## Two symmetric projects: Rotten Tomatoes and Letterboxd
 
-The repository contains two intentionally isolated, visually parallel movie
-prediction projects. Rotten Tomatoes predicts a critic-like 0–5 score from
-professional reviews; Letterboxd predicts a member-like 1–10 score from other
-members. They never share raw data, processed parquet files, or trained model
-artifacts.
+The repository holds two intentionally isolated, identically-structured movie
+rating predictors. **Rotten Tomatoes** predicts a critic-like score on a
+parsed 0–5 scale from ~4,400 professional critics (sparse pseudo-user
+profiles, since no real per-user history exists in the source data).
+**Letterboxd** predicts a member-like score on the native 1–10 scale from
+7,420 real members with dense, genuine rating histories. Every directory is
+mirrored — `src/{rotten_tomatoes,letterboxd}/`, `data/{rotten_tomatoes,
+letterboxd}/`, `results/{rotten_tomatoes,letterboxd}/`, `web/public/data/
+{rotten_tomatoes,letterboxd}/` — and neither project reads the other's raw
+data, processed files, or trained models.
 
 | | Rotten Tomatoes | Letterboxd |
 |---|---|---|
-| rater population | professional critics | Letterboxd members |
+| rater population | ~4,400 professional critics (pseudo-users) | 7,420 real members |
 | target scale | parsed to 0–5 | native 1–10 |
-| Design 1 | analytic critic match | analytic member match |
-| Design 2 | 38-feature XGBoost | member/movie-statistic XGBoost |
-| Design 3 | trained neural ensemble | code present, intentionally untrained |
-| interactive catalog | 1,000 popular films | 1,000 popular films in Streamlit |
+| eligibility floor | ≥10 scored films | ≥5 rated films |
+| Design 1 | analytic critic-match formula | analytic member-match formula (same formula) |
+| Design 2 | 38-feature XGBoost (incl. Tomatometer) | 37-feature XGBoost (same contract, no Tomatometer) |
+| Design 3 | trained residual-MLP ensemble | trained residual-MLP ensemble (same architecture) |
+| interactive catalog | 1,000 popular films, live in browser + Streamlit | 1,000 popular films, live in browser + Streamlit |
+
+Letterboxd adopts the **same 37-feature similarity-decile contract** as Rotten
+Tomatoes' Design 2/3 (ten deciles of `similarity x deviation`, plus seen-count,
+overlap, rater-count, dispersion, genre, and the user's own mean) — the only
+difference is there is no Tomatometer-equivalent feature. This makes the two
+Design 2/3 pairs a fair architectural comparison, not just a shared formula for
+Design 1.
 
 Download `ratings_export.csv` and `movie_data.csv` from the supplied Kaggle
 dataset into `data/letterboxd/raw/`, then run from `src/`:
 
 ```bash
 python -m letterboxd.preprocess
-python -m letterboxd.train_analytic
 python -m letterboxd.train_xgboost
-python -m letterboxd.train_neural  # prints a deliberate no-training message
+python -m letterboxd.train_neural
+python -m letterboxd.analyze
+python -m letterboxd.web_export
 ```
 
 The downloaded export yielded 11,078,045 ratings from 7,420 members with at
-least five ratings across 286,069 films. The requested 100k, 1M, and 10M scale
-checks all complete in under 30 seconds but resolve to that complete local
-population—the source has fewer eligible members than the smallest cap.
+least five ratings across 286,069 films (not 11 million *users* — 11 million
+*ratings* from 7,420 people). The requested 100k, 1M, and 10M scale checks all
+complete in under 30 seconds but resolve to that complete local
+population — the source has fewer eligible members than the smallest cap.
 
-Current Letterboxd artifacts are isolated in `results/letterboxd/`: Design 1
-records a 1.695 RMSE on 300 deterministic held-out member profiles with 50 seen
-films; Design 2 records a 1.628 RMSE on 1,435 member-disjoint held-out ratings.
-Those numbers are not directly comparable to RT RMSE because Letterboxd uses a
-1–10 target and a different evaluation population. The Streamlit app has a
-project selector and a fully interactive 1–10 Letterboxd catalog. The static
-website has the matching project selector, methodology, and current results;
-its existing browser prediction engine remains RT-only until a compact
-Letterboxd browser export is added.
+Letterboxd artifacts live in `results/letterboxd/`. The authoritative
+evaluation is `letterboxd.analyze`'s paired/nested seen-history sweep (the same
+protocol as Rotten Tomatoes' `comparison.analysis`), over 300 deterministic
+test members with more than 50 rated films, 8 fixed targets each, 3 seen-order
+redraws:
 
-For the full project-specific workflow and leakage notes, see
-[`src/letterboxd/README.md`](src/letterboxd/README.md).
+| method | 3 | 5 | 10 | 20 | 50 | all |
+|---|---:|---:|---:|---:|---:|---:|
+| B1 global mean | 2.108 | 2.108 | 2.108 | 2.108 | 2.108 | 2.108 |
+| B3 mean of all members | 1.639 | 1.639 | 1.639 | 1.639 | 1.639 | 1.639 |
+| B4 mean of top-10 similar | 1.705 | 1.686 | 1.671 | 1.653 | 1.657 | 1.622 |
+| Design 1 analytic | 1.765 | 1.670 | 1.597 | 1.561 | 1.545 | **1.507** |
+| Design 2 XGBoost | 1.663 | 1.609 | 1.588 | 1.562 | 1.533 | **1.501** |
+| Design 3 neural net | 1.676 | 1.620 | 1.593 | 1.561 | 1.543 | **1.515** |
+
+**Honest cross-dataset finding.** RT and Letterboxd use different scales
+(0–5 vs 1–10), so raw RMSE isn't comparable — normalizing by rating range
+(`RMSE / (max − min)`) puts them on the same footing:
+
+| design | RT normalized (0–5) | Letterboxd normalized (1–10) |
+|---|---:|---:|
+| Design 1 analytic | 0.163 | 0.167 |
+| Design 2 XGBoost | 0.158 | 0.167 |
+| Design 3 neural net | 0.159 | 0.168 |
+
+The two are **comparable**, with Rotten Tomatoes marginally *better*
+normalized despite its far sparser critic pseudo-user profiles. Letterboxd's
+real value isn't a lower headline RMSE — it's genuine dense per-member rating
+histories instead of synthetic pseudo-users; the "more data performs much
+better" hypothesis is not supported by this matched-protocol comparison. See
+`results/letterboxd/cross_dataset_comparison.csv` for the full numbers.
+
+The Streamlit app has a project selector with a fully interactive 1–10
+Letterboxd catalog running all three trained designs live, exactly like Rotten
+Tomatoes. The website has the same project switcher, and both projects' models
+run **client-side in the browser** (see [Website](#website) below).
+
+For the full project-specific workflow, feature contract, and leakage notes,
+see [`src/letterboxd/README.md`](src/letterboxd/README.md).
 
 This project predicts a user's standardized 0-5 movie rating from professional
 critic scores. It offers three designs: an explicit movie-mean-centered
@@ -205,7 +247,7 @@ column, so the baselines are exactly flat):
 | Design 2 XGBoost | 0.815 | 0.811 | 0.805 | 0.801 | 0.796 | **0.791** |
 | Design 3 neural net | 0.820 | 0.816 | 0.809 | 0.804 | 0.798 | 0.793 |
 
-![RMSE versus sampled seen history](results/figures/plotA_rmse_vs_n.png)
+![RMSE versus sampled seen history](results/rotten_tomatoes/figures/plotA_rmse_vs_n.png)
 
 Reading the curve:
 
@@ -237,51 +279,68 @@ high-disagreement films (XGBoost +5.1%, neural net +4.8% there).
 
 Live at **[ap-gautham.github.io/palate](https://ap-gautham.github.io/palate/)**,
 built with Vite + React + TypeScript (`web/`) and hosted as a static GitHub
-Pages site from `docs/` -- no server. All three models run **client-side in
-the browser**: the analytic formula is plain arithmetic, the XGBoost model is
-a from-scratch JSON tree-walker (`web/src/lib/xgboost.ts`), and the neural
-net is a hand-written forward pass (`web/src/lib/neuralnet.ts`) over the
-ensemble's raw weights, exported by `src/web_export/export.py`. The port is
-checked against the Python `predict.py` outputs in `web/scripts/validate.ts`
-(the analytic formula matches to float precision; the trained models agree to
-within ~0.02 on the 0-5 scale, from an unstable-sort tie-break -- see the
-comment in `web/src/lib/features.ts`).
+Pages site from `docs/` -- no server. The app defaults to the interactive tab
+(About is one click away), with a dataset switcher between Rotten Tomatoes and
+Letterboxd. **All three models, for both datasets, run client-side in the
+browser**: each analytic formula is plain arithmetic, each XGBoost model is a
+from-scratch JSON tree-walker (`web/src/lib/xgboost.ts`, shared by both
+datasets via a parameterized clamp range), and each neural net is a
+hand-written forward pass (`web/src/lib/neuralnet.ts`, also shared) over the
+ensemble's raw weights. Rotten Tomatoes' export lives under
+`web/src/lib/*.ts` / `src/rotten_tomatoes/web_export/export.py`; Letterboxd's
+parallel port lives under `web/src/lib/letterboxd/*.ts` /
+`src/letterboxd/web_export.py`. Both ports are checked against their Python
+inference paths in `web/scripts/validate*.ts` (analytic formulas match to
+float precision; the trained models agree to within ~0.01-0.05 on their
+respective scales, from an unstable-sort tie-break -- see the comment in each
+project's `features.ts`).
 
-A separate Streamlit app (`app/streamlit_app.py`) reproduces the same UI
-against the original Python inference code, for local use:
+A separate Streamlit app (`app/streamlit_app.py`) reproduces the same two-tab
+experience against the original Python inference code, for local use:
 
 ```bash
 .venv/bin/streamlit run app/streamlit_app.py
 ```
 
-Both apps hold the same catalog of the **1,000 most-reviewed movies** (3,387
-critics appear in them). A sort control orders the search lists alphabetically
-(default), by year, or by most reviewed. Both have three sections:
+Both projects hold a catalog of their **1,000 most-rated films**. A sort
+control orders the search lists alphabetically (default), by year, or by
+review/rating count, and the search dropdown scrolls through every match
+rather than truncating. Both have three sections:
 
-1. **Films you have seen** -- a search box adds a film to a table; each row has
-   a five-star widget (click a star, it and all before it light up gold, and
-   the rating shows beside it), the search box clears after each add, and rows
-   can be removed.
-2. **Films to predict** -- the same searchable star-table; scoring these is
+1. **Films you have seen** -- a search box adds a film to a table; Rotten
+   Tomatoes uses a five-star widget (click a star, it and all before it light
+   up gold), Letterboxd uses a 1-10 stepper; the search box clears after each
+   add, and rows can be removed.
+2. **Films to predict** -- the same searchable table; scoring these is
    optional.
 3. **Predictions** -- for every target film, all three model predictions side
-   by side with the movie's consensus mean and Tomatometer. When you score some
-   target films, the app reports the mean squared error of each method -- and
-   of the consensus mean -- **against your own score**, and marks the closest,
-   answering "which method predicts me best?". Predictions update live as the
-   stars change.
+   by side with the movie's consensus mean (plus Tomatometer, for Rotten
+   Tomatoes). When you score some target films, the app reports the mean
+   squared error of each method -- and of the consensus mean -- **against your
+   own score**, and marks the closest, answering "which method predicts me
+   best?". Predictions update live as ratings change.
 
-Model artifacts are `results/models/design2_xgboost.json` and `design3_mlp.pt`;
-each design's app inference lives in its own `predict.py`. To rebuild the web
-app after retraining a model: `cd src && python -m rotten_tomatoes.web_export.export && cd
-../web && npm install && npm run build` (writes into `docs/`).
+Model artifacts: `results/rotten_tomatoes/models/{design2_xgboost.json,
+design3_mlp.pt}` and `results/letterboxd/models/{letterboxd_xgboost.json,
+letterboxd_neural.pt}`; each design's app inference lives in its own
+`predict.py` (or the shared `features.py`/`analyze.py` helpers, for
+Letterboxd). To rebuild the web app after retraining a model:
+
+```bash
+cd src
+python -m rotten_tomatoes.web_export.export
+python -m letterboxd.web_export
+cd ../web && npm install && npm run build   # writes into docs/
+```
 
 ## Reproduce
+
+Rotten Tomatoes:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-# Place the Kaggle CSVs in data/raw/.
+# Place the Kaggle CSVs in data/rotten_tomatoes/raw/.
 cd src
 for m in rotten_tomatoes.preprocessing.build_dataset rotten_tomatoes.preprocessing.audit rotten_tomatoes.design1_analytic.run \
          rotten_tomatoes.design2_xgboost.train rotten_tomatoes.design3_neural.train rotten_tomatoes.design1_analytic.attribution \
@@ -290,6 +349,16 @@ for m in rotten_tomatoes.preprocessing.build_dataset rotten_tomatoes.preprocessi
 done
 cd ..
 .venv/bin/python -m unittest discover -s tests -v
+```
+
+Letterboxd (place the Kaggle CSVs in `data/letterboxd/raw/` -- see
+[`src/letterboxd/README.md`](src/letterboxd/README.md) for the full contract):
+
+```bash
+cd src
+for m in letterboxd.preprocess letterboxd.train_xgboost letterboxd.train_neural letterboxd.analyze; do
+  ../.venv/bin/python -m "$m"
+done
 ```
 
 Detailed methodology, leakage controls, feature definitions, and limitations

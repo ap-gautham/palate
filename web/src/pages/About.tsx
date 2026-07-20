@@ -146,6 +146,58 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
       </section>
 
       <section>
+        <p className="kicker">Second dataset</p>
+        <h2>Does real, dense rating data actually do better?</h2>
+        <p>
+          Critics are a sparse proxy for real people. To test the hypothesis directly, the exact same
+          three-design pipeline was rebuilt — fully isolated, same feature contract, same evaluation protocol —
+          on <b>7,420 real Letterboxd members</b> with genuine dense rating histories (11.08M ratings, native
+          1–10 scale, no Tomatometer). Switch datasets at the top of the app tab to try it live.
+        </p>
+        <div className="cards">
+          <div className="card d1">
+            <h3>Analytic formula</h3>
+            <span className="n">1.507</span>
+            <p>Same movie-mean-centred, magnitude-scaled formula as Rotten Tomatoes' Design 1.</p>
+          </div>
+          <div className="card d2">
+            <h3>XGBoost</h3>
+            <span className="n">1.501</span>
+            <p>Same 37-feature contract as Design 2 (identical minus the Tomatometer feature).</p>
+          </div>
+          <div className="card d3">
+            <h3>Neural network</h3>
+            <span className="n">1.515</span>
+            <p>Same residual-MLP architecture as Design 3 — genuinely trained, not a placeholder.</p>
+          </div>
+        </div>
+        <p className="muted small" style={{ marginTop: 14 }}>
+          Full-history RMSE on the 1–10 scale (lower is better). All three run live in the app, exactly like
+          Rotten Tomatoes.
+        </p>
+        <figure>
+          <img
+            src={`${BASE}assets/letterboxd_plotA_rmse_vs_n.png`}
+            alt="Letterboxd RMSE versus the number of films rated, for each method"
+          />
+          <figcaption>
+            The same seen-history sweep as the Rotten Tomatoes plot above, styled identically. All three designs
+            converge to ≈1.50–1.52 at full history.
+          </figcaption>
+        </figure>
+        <div className="callout" style={{ marginTop: 20 }}>
+          <p style={{ marginTop: 0, marginBottom: 0 }}>
+            <b>Honest cross-dataset finding:</b> raw RMSE isn't comparable across a 0–5 scale and a 1–10 scale, so
+            normalizing by rating range (RMSE ÷ range) puts them on the same footing. Rotten Tomatoes normalizes to
+            ~0.158–0.163; Letterboxd normalizes to ~0.167–0.168 — <b>comparable</b>, with Rotten Tomatoes actually
+            slightly <i>better</i> despite its far sparser critic pseudo-user profiles. More real rating data did{" "}
+            <b>not</b> translate into a lower normalized error here. Letterboxd's genuine value is dense real-member
+            histories, not a lower headline RMSE — reported as found, not tuned to confirm the hypothesis.
+          </p>
+        </div>
+      </section>
+
+      <section>
         <p className="kicker">The data</p>
         <h2>From 1.4M reviews to a usable matrix</h2>
         <ul className="funnel">
@@ -196,9 +248,10 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
 
       <footer>
         <p>
-          Built from ~1.4M Rotten Tomatoes critic reviews (Kaggle). Each design is a self-contained Python package;
-          all results regenerate from fixed seeds. The three models here run as a client-side TypeScript port
-          (an XGBoost tree-walker and a hand-written neural-net forward pass) of the original Python inference code.{" "}
+          Built from ~1.4M Rotten Tomatoes critic reviews and 11.08M Letterboxd member ratings (both Kaggle).
+          Each project is a self-contained, symmetric Python package; all results regenerate from fixed seeds.
+          Every model on this page runs as a client-side TypeScript port (an XGBoost tree-walker and a
+          hand-written neural-net forward pass) of the original Python inference code, for both datasets.{" "}
           <a href="https://github.com/ap-gautham/palate">github.com/ap-gautham/palate</a>
         </p>
       </footer>

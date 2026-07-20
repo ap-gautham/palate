@@ -10,7 +10,7 @@
 \usepackage[colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black,citecolor=blue!55!black]{hyperref}
 \usepackage{titlesec}
 
-\graphicspath{{../results/figures/}}
+\graphicspath{{../results/rotten_tomatoes/figures/}}
 \captionsetup{font=small,labelfont=bf}
 \titleformat{\section}{\large\bfseries}{\thesection}{0.6em}{}
 \titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.6em}{}
@@ -28,7 +28,7 @@
 \vspace{-0.6cm}
 
 \begin{abstract}
-We simulate user histories from critics instead of restricting evaluation to a late temporal window. For each fake user, sampled ratings are seen movies and a different rated movie is an unseen target. The analytic formula centers on the target movie's critic mean, applies signed Pearson similarity, and maps critic rating magnitude to the user. Evaluation is \emph{paired and nested}: a fixed target and a fixed seen-order per pseudo-user are reused across every seen-count, so the seen-independent baselines are exactly flat and the curves are smooth. Across 41{,}472 paired episodes from 556 test critics, full-history analytic RMSE is 0.814 versus 0.827 for the reviewer mean and 0.841 for a calibrated Tomatometer. Two trained models --- an XGBoost regressor (0.791) and a deeper residual neural-network ensemble (0.793) --- beat every baseline at every seen-count and are statistically tied with each other. The gain is calibration, not taste matching: both models lean first on the movie's Tomatometer, then the user's mean.
+We simulate user histories from critics instead of restricting evaluation to a late temporal window. For each fake user, sampled ratings are seen movies and a different rated movie is an unseen target. The analytic formula centers on the target movie's critic mean, applies signed Pearson similarity, and maps critic rating magnitude to the user. Evaluation is \emph{paired and nested}: a fixed target and a fixed seen-order per pseudo-user are reused across every seen-count, so the seen-independent baselines are exactly flat and the curves are smooth. Across 41{,}472 paired episodes from 556 test critics, full-history analytic RMSE is 0.814 versus 0.827 for the reviewer mean and 0.841 for a calibrated Tomatometer. Two trained models --- an XGBoost regressor (0.791) and a deeper residual neural-network ensemble (0.793) --- beat every baseline at every seen-count and are statistically tied with each other. The gain is calibration, not taste matching: both models lean first on the movie's Tomatometer, then the user's mean. A fully parallel second project (\S\ref{sec:letterboxd}) repeats the entire pipeline on 11.08M real Letterboxd community ratings (1--10 scale, dense per-member histories instead of sparse critic pseudo-users); normalizing both projects' RMSE by rating range shows they are comparable, with Rotten Tomatoes marginally \emph{better} normalized despite its sparser profiles --- an honest result reported as found, not the naively expected one.
 \end{abstract}
 
 \section{Data and score scale}
@@ -187,15 +187,50 @@ Magnitude matching supplies the entire improvement over the consensus; the signe
 \label{fig:plotB}
 \end{figure}
 
+\section{Second dataset: Letterboxd community ratings}
+\label{sec:letterboxd}
+
+To test whether real, dense per-user rating histories beat the sparse critic pseudo-users above, we built a fully parallel second project on Letterboxd community ratings (Kaggle, \textasciitilde11.08M ratings), isolated in its own directory tree (\texttt{src/letterboxd/}, \texttt{data/letterboxd/}, \texttt{results/letterboxd/}) that never shares data, models, or code with the Rotten Tomatoes project. The export yields 7{,}420 members with at least five rated films across 286{,}069 films --- 11{,}078{,}045 ratings total, not 11 million distinct members. Ratings are native on a 1--10 scale (no score parsing). All three designs adopt the \emph{same} 37-feature similarity-decile contract as Design 2/3 above, minus the Tomatometer feature (Letterboxd has no critic-consensus meter): ten deciles of similarity-weighted deviation, plus seen count, overlap statistics, rater count, dispersion, genre, and the member's own mean. Design 3 is a genuinely trained residual MLP ensemble, identical in architecture to the Rotten Tomatoes network, and --- being inductive over engineered features rather than a member/movie embedding --- it scores a brand-new member's live ratings in the browser or Streamlit app, just like Designs 1 and 2.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+\textbf{Seen ratings $n$} & 3 & 5 & 10 & 20 & 50 & all \\
+\midrule
+B1 global mean & 2.108 & 2.108 & 2.108 & 2.108 & 2.108 & 2.108 \\
+B3 mean of all members & 1.639 & 1.639 & 1.639 & 1.639 & 1.639 & 1.639 \\
+B4 top-10 similar mean & 1.705 & 1.686 & 1.671 & 1.653 & 1.657 & 1.622 \\
+Design 1 analytic & 1.765 & 1.670 & 1.597 & 1.561 & 1.545 & \textbf{1.507} \\
+Design 2 XGBoost & 1.663 & 1.609 & 1.588 & 1.562 & 1.533 & \textbf{1.501} \\
+Design 3 neural net & 1.676 & 1.620 & 1.593 & 1.561 & 1.543 & \textbf{1.515} \\
+\bottomrule
+\end{tabular}
+\caption{Letterboxd RMSE (1--10 scale) on the same paired, nested seen-history protocol as Table~\ref{tab:nsweep}: 300 deterministic test members, 8 fixed targets each, 3 seen-order redraws.}
+\label{tab:lb-nsweep}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.92\textwidth]{../results/letterboxd/figures/plotA_rmse_vs_n.png}
+\caption{Letterboxd: error versus sampled seen history, styled identically to Figure~\ref{fig:plotA}. All three designs converge to $\approx 1.50$--$1.52$ at full history.}
+\label{fig:lb-plotA}
+\end{figure}
+
+\textbf{Honest cross-dataset finding.} Raw RMSE is not comparable across the two projects because the target scales differ (0--5 versus 1--10); normalizing by rating range (RMSE~/~(max$-$min)) puts them on the same footing. Rotten Tomatoes' normalized RMSE is 0.163 / 0.158 / 0.159 (Design 1/2/3); Letterboxd's is 0.167 / 0.167 / 0.168. The two are \emph{comparable}, with Rotten Tomatoes marginally \emph{better} normalized despite training on far sparser critic pseudo-user profiles instead of Letterboxd's dense real member histories. This is reported as found: more (real) rating data did not translate into a lower normalized error at this scale and with this feature contract. Letterboxd's genuine value is dense, real per-member histories rather than synthetic pseudo-users --- not a lower headline RMSE. Full numbers are in \texttt{results/letterboxd/cross\_dataset\_comparison.csv}.
+
 \section{Application and limitations}
 
 The Streamlit app (Table~\ref{tab:funnel}: 1{,}000 catalog movies, 3{,}387 critics) is organized in three sections, and a sort control orders the search lists alphabetically (default), by year, or by most reviewed. \emph{(1) Films you have seen}: a search box adds a film to a table where each row carries a five-star widget --- click a star and it and all before it light gold, with the rating shown beside it --- and the search box clears after each add so films accumulate; rows can be removed. \emph{(2) Films to predict}: the same searchable star-table, but scoring is optional. \emph{(3) Predictions}: for every target film the app shows all three model predictions side by side with the movie's consensus mean and its Tomatometer. When the visitor scores some target films, the app reports the mean squared error of each method --- and of the consensus mean --- \emph{against the visitor's own score}, and marks the closest, answering ``which method predicts me best?''. Predictions update live as stars change.
+
+A dataset switcher on both the website and the Streamlit app swaps to the Letterboxd project, which is otherwise identical apart from a 1--10 numeric stepper in place of the five-star widget and no Tomatometer column.
 
 Item holdout is not temporal forecasting. Lowering the critic floor to 10 adds noisier low-volume critics. The magnitude multiplier is an unregularized through-origin slope. The neural net matches but does not beat the trees here. Scores are quantized to six levels, pseudo-users are professional critics rather than casual users, and Tomatometer values are current snapshots.
 
 \vspace{0.4em}
 \hrule
 \vspace{0.4em}
-{\small\textbf{Reproducibility.} Python, pandas, scipy.sparse, NumPy, XGBoost, PyTorch, matplotlib, and Streamlit. Each design is a self-contained package under \texttt{src/} (\texttt{design1\_analytic}, \texttt{design2\_xgboost}, \texttt{design3\_neural}); the pseudo-user substrate and feature code are duplicated verbatim in each, so a reader studies one design without chasing shared modules, and the shared seeds keep the cross-design comparison exact. Run the ordered module pipeline listed in the README from \texttt{src/}; all random seeds are fixed.}
+{\small\textbf{Reproducibility.} Python, pandas, scipy.sparse, NumPy, XGBoost, PyTorch, matplotlib, and Streamlit. Each Rotten Tomatoes design is a self-contained package under \texttt{src/rotten\_tomatoes/} (\texttt{design1\_analytic}, \texttt{design2\_xgboost}, \texttt{design3\_neural}); the pseudo-user substrate and feature code are duplicated verbatim in each, so a reader studies one design without chasing shared modules, and the shared seeds keep the cross-design comparison exact. The Letterboxd project under \texttt{src/letterboxd/} mirrors this layout exactly. Both projects also run entirely client-side in the browser (Vite/React/TypeScript, \texttt{web/}), hosted as a static GitHub Pages site with no server. Run the ordered module pipelines listed in the README from \texttt{src/}; all random seeds are fixed.}
 
 \end{document}

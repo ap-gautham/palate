@@ -32,7 +32,21 @@
 >   end-to-end with headless Chrome: rating films across both Rotten Tomatoes
 >   and Letterboxd tabs produces live 3-design predictions, correct MSE-vs-you
 >   winner, and a populated closest-members table.
-> - ⏳ **Phases 4–6**: not started.
+> - ✅ **Phase 4 — verify already-done asks**: confirmed in code (app defaults
+>   to the app tab unless `#about`; autocomplete returns the full filtered list,
+>   no 10-item cap) and via screenshots taken throughout Phase 2/3 testing.
+> - ✅ **Phase 5 — docs**: complete. README rewritten (symmetric layout, correct
+>   LB numbers, honest normalized-RMSE comparison table, updated commands);
+>   DOCUMENTATION.md parallel-project table + path fixes; `src/letterboxd/README.md`
+>   fully rewritten (feature contract, inductive Design 3, results, honest
+>   comparison); `report/report.tex` gained a new "Second dataset: Letterboxd
+>   community ratings" section (table + figure + honest finding), recompiled to
+>   a 7-page PDF with no warnings, copied to both `docs/assets/` and
+>   `web/public/assets/`; `About.tsx` gained a matching "Second dataset" section
+>   with LB cards, plot, and the honest cross-dataset callout — verified via
+>   screenshot. Repo-wide sweep confirms no remaining "untrained" language or
+>   stale 1.695/1.628 numbers.
+> - ⏳ **Phase 6**: not started (final build/verify/ship).
 
 ## Context
 

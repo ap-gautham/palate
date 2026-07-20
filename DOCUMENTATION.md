@@ -4,30 +4,46 @@ This document describes the current all-time random-holdout implementation.
 [movie_rec_engine_brief.md](movie_rec_engine_brief.md) is historical planning
 context; it contains superseded temporal and aggregation proposals.
 
-> **Two parallel projects.** The original sections below document the
-> Rotten Tomatoes critic project. The repository now also contains a separate
-> Letterboxd member-rating project at `src/letterboxd/`. It uses the same
-> three-design vocabulary, held-out-rating discipline, sparse neighbourhood
-> idea, and app flow, but it does not mix data, model artifacts, or score
-> scales with RT. See [`src/letterboxd/README.md`](src/letterboxd/README.md)
-> for the Letterboxd-specific contract, commands, metrics, and caveats.
+> **Two symmetric projects.** The original sections below document the
+> Rotten Tomatoes critic project, now under `src/rotten_tomatoes/`. The
+> repository also contains a fully parallel Letterboxd member-rating project at
+> `src/letterboxd/`. Every directory is mirrored (`src/`, `data/`, `results/`,
+> `web/public/data/`) and Letterboxd adopts the same three-design vocabulary,
+> held-out-rating discipline, 37-feature similarity-decile contract, paired
+> n-sweep evaluation, and app flow -- with all three designs trained and
+> serving live predictions in both the browser and Streamlit. It never mixes
+> data, model artifacts, or score scales with RT. See
+> [`src/letterboxd/README.md`](src/letterboxd/README.md) for the
+> Letterboxd-specific contract, commands, metrics, and caveats.
 
 ## Parallel-project comparison
 
 | Concern | Rotten Tomatoes | Letterboxd |
 |---|---|---|
-| Source | critic reviews | community member ratings |
+| Source | critic reviews (sparse pseudo-users) | real community member ratings |
 | Native target | heterogeneous source scores -> 0–5 | native integer 1–10 |
-| Processed data | `data/processed/` | `data/letterboxd/processed/` |
-| Results | `results/tables/`, `results/models/` | `results/letterboxd/` |
-| Design 1 | analytic critic match | analytic member match |
-| Design 2 | 38-feature XGBoost | 5-feature XGBoost baseline |
-| Design 3 | trained residual MLP ensemble | written but intentionally untrained |
+| Eligibility floor | ≥10 scored films | ≥5 rated films |
+| Raw / processed data | `data/rotten_tomatoes/{raw,processed}/` | `data/letterboxd/{raw,processed}/` |
+| Results | `results/rotten_tomatoes/{tables,models,figures}/` | `results/letterboxd/{models,figures}/` |
+| Design 1 | analytic critic-match formula | analytic member-match formula (same formula) |
+| Design 2 | 38-feature XGBoost (incl. Tomatometer) | 37-feature XGBoost (same contract, no Tomatometer) |
+| Design 3 | trained residual MLP ensemble | trained residual MLP ensemble (same architecture) |
+| Evaluation | paired/nested n-sweep (`comparison.analysis`) | paired/nested n-sweep (`letterboxd.analyze`) |
 | Interactive UI | Critic Match | Community Match — Letterboxd |
+| Full-history RMSE | 0.814 / 0.791 / 0.793 (D1/D2/D3) | 1.507 / 1.501 / 1.515 (D1/D2/D3) |
+| Normalized RMSE (÷ rating range) | 0.163 / 0.158 / 0.159 | 0.167 / 0.167 / 0.168 |
 
-RMSE values must be interpreted within a project because the outcome scales,
-sources, and current evaluation episode counts differ. The UI keeps the
-workflows visually parallel while making those differences explicit.
+Raw RMSE values are not comparable across projects because the target scales
+differ (0–5 vs 1–10); **normalized RMSE** (`RMSE / (max − min)`) puts them on
+the same footing. On that basis the two projects are **comparable**, with
+Rotten Tomatoes marginally *better* normalized despite training on far sparser
+critic pseudo-user profiles instead of Letterboxd's dense real member
+histories. This is an honest result, not the expected outcome: more (real)
+data did not translate into a lower normalized RMSE here, at this scale and
+with this feature contract. See `results/letterboxd/cross_dataset_comparison.csv`
+for the full numbers and `results/letterboxd/nsweep_summary.csv` /
+`results/rotten_tomatoes/tables/model_summary.csv` for each project's own
+seen-history sweep.
 
 ## 1. Reproduction and Layout
 
@@ -41,37 +57,45 @@ and the cross-design comparison is valid. Only the constants in `config.py`
 (paths, seeds, the evaluation grid) are shared -- constants, not functions.
 
 ```text
-src/config.py                     Shared paths + constants (no logic)
-src/preprocessing/
+src/rotten_tomatoes/config.py     Shared paths + constants (no logic)
+src/rotten_tomatoes/preprocessing/
     parse_scores.py               Parse the six score formats; standardize to 0-5
     build_dataset.py              Ingest, dedup, filter, standardize -> reviews_scored.parquet
     audit.py                      All-time data funnel and score diagnostics
     score_distributions.py        Distribution figures + dispersion table
-src/design1_analytic/             SELF-CONTAINED analytic design
+src/rotten_tomatoes/design1_analytic/   SELF-CONTAINED analytic design
     pseudo_users.py               Matrix, similarity+magnitude, paired episodes, partition
     analytic.py                   Shrinkage, movie-mean-centered formula, top-k baseline
     run.py                        k-sweep + paired test + baselines -> tables
     attribution.py                Formula-component decomposition
     predict.py                    App inference (similarity table + formula)
-src/design2_xgboost/              SELF-CONTAINED XGBoost design
+src/rotten_tomatoes/design2_xgboost/    SELF-CONTAINED XGBoost design
     pseudo_users.py               (identical substrate copy)
     features.py                   Decile feature contract + generation + app builders
     train.py                      XGBoost training + paired test eval
     predict.py                    App inference
-src/design3_neural/               SELF-CONTAINED neural-net design
+src/rotten_tomatoes/design3_neural/     SELF-CONTAINED neural-net design
     pseudo_users.py               (identical substrate copy)
     features.py                   (identical feature copy)
     network.py                    Residual tabular MLP
     train.py                      Ensemble training on the GPU + paired test eval
     predict.py                    App inference
-src/comparison/analysis.py        Cross-design figures, summary + dispersion tables
-src/app_catalog/export.py         1,000-movie app catalog
-app/streamlit_app.py              Star-table rating UI; live formula + XGBoost + neural net
+src/rotten_tomatoes/comparison/analysis.py   Cross-design figures, summary + dispersion tables
+src/rotten_tomatoes/app_catalog/export.py    1,000-movie app catalog
+src/rotten_tomatoes/web_export/export.py     Browser export (bins + tree/weight JSON)
+app/streamlit_app.py              Star-table / stepper rating UI; live formula + XGBoost + neural net
+                                   for both Rotten Tomatoes and Letterboxd
 tests/                            Formula, holdout, paired-episode, partition, feature tests
 ```
 
+`src/letterboxd/` mirrors this layout exactly (see
+[`src/letterboxd/README.md`](src/letterboxd/README.md)): `config.py`,
+`preprocess.py`, `features.py` (the shared 37-feature contract),
+`train_xgboost.py`, `network.py` + `train_neural.py`, `analyze.py`
+(cross-design evaluation), and `web_export.py`.
+
 Run from `src/` as modules (so package imports resolve) after placing the
-Kaggle CSVs in `data/raw/`:
+Kaggle CSVs in `data/rotten_tomatoes/raw/`:
 
 ```bash
 python3 -m venv .venv
@@ -268,12 +292,12 @@ deviation[c, m] = r[c, m] - mean of critic c's other all-time scores
 Reviewers are sorted by similarity. The model uses mean/count/standard
 deviation summaries of `similarity * deviation` across ten ranked deciles,
 then appends seen-count, overlap statistics, Tomatometer score, reviewer count,
-movie dispersion, genre ID, and user mean. `src/design2_xgboost/features.py`
+movie dispersion, genre ID, and user mean. `src/rotten_tomatoes/design2_xgboost/features.py`
 builds these columns for training and app inference alike.
 
-The saved artifact is `results/models/design2_xgboost.json` (sliced to the
+The saved artifact is `results/rotten_tomatoes/models/design2_xgboost.json` (sliced to the
 early-stopped best iteration); its metadata records exact feature order and
-genre IDs in `results/models/design2_xgboost_meta.json`. A missing Tomatometer
+genre IDs in `results/rotten_tomatoes/models/design2_xgboost_meta.json`. A missing Tomatometer
 is passed to XGBoost as a missing value (gradient boosting handles it natively);
 `genre_id` enters as a plain numeric column (a low-importance feature). Verified
 free of target leakage: peer deviations are leave-one-out and the pseudo-user
@@ -284,7 +308,7 @@ seeds, so both train and are scored on byte-identical rows.
 
 ## 6b. Design 3: Neural Network
 
-`src/design3_neural/train.py` trains a residual neural network on features it
+`src/rotten_tomatoes/design3_neural/train.py` trains a residual neural network on features it
 generates itself (its own `features.py` copy), on the Apple GPU (MPS) when
 available. It uses **all** the same features:
 the 37 numeric features (log1p-compressed where they are counts, NaN-imputed
@@ -296,7 +320,7 @@ twice, with a skip; ~3M weights), and a linear head. Training uses AdamW, a
 ReduceLROnPlateau schedule, and early stopping; **three independently seeded
 networks are averaged** into an ensemble. The whole training set is moved to
 the GPU once (per-batch host->device copies otherwise dominate MPS step time).
-The artifact is `results/models/design3_mlp.pt` (all three state dicts plus
+The artifact is `results/rotten_tomatoes/models/design3_mlp.pt` (all three state dicts plus
 preprocessing stats). Log compression and full-history training rows are both
 required: without them the net extrapolates badly at `n = all`, where
 `n_observed` is far outside any finite-`n` training row (trees do not have this
