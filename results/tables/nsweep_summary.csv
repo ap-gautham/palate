@@ -1,0 +1,31 @@
+n,method,label,rmse,rmse_std_draws,n_pred_per_draw,fallback_rate
+-1,design1,Design 1 (movie mean + magnitude),0.8135724435726619,0.0,2304,0.002170138888888889
+-1,tomatometer_z,B2: Tomatometer->score (reviewer fallback),0.8412693512071759,0.0,2304,
+-1,critic_mean,B3: mean of all reviewers,0.8264817409017384,0.0,2304,
+-1,topk_similar_mean,B4: mean of top-10 similar,0.8489460673193122,1.1102230246251565e-16,2304,
+-1,zero,B1: global mean score,1.0538717241212785,0.0,2304,
+3,design1,Design 1 (movie mean + magnitude),0.9569873513177488,0.004662486254979276,2304,0.20949074074074073
+3,tomatometer_z,B2: Tomatometer->score (reviewer fallback),0.8412693512071759,0.0,2304,
+3,critic_mean,B3: mean of all reviewers,0.8264817409017384,0.0,2304,
+3,topk_similar_mean,B4: mean of top-10 similar,0.8910826639442688,0.005397900898628106,2304,
+3,zero,B1: global mean score,1.0538717241212785,0.0,2304,
+5,design1,Design 1 (movie mean + magnitude),0.9253441515772799,0.0050580398502574194,2304,0.07609953703703703
+5,tomatometer_z,B2: Tomatometer->score (reviewer fallback),0.8412693512071759,0.0,2304,
+5,critic_mean,B3: mean of all reviewers,0.8264817409017384,0.0,2304,
+5,topk_similar_mean,B4: mean of top-10 similar,0.891733779945834,0.002054559186915865,2304,
+5,zero,B1: global mean score,1.0538717241212785,0.0,2304,
+10,design1,Design 1 (movie mean + magnitude),0.8691174464062632,0.0030682047223977655,2304,0.024739583333333332
+10,tomatometer_z,B2: Tomatometer->score (reviewer fallback),0.8412693512071759,0.0,2304,
+10,critic_mean,B3: mean of all reviewers,0.8264817409017384,0.0,2304,
+10,topk_similar_mean,B4: mean of top-10 similar,0.8768168042967548,0.0038516656024340673,2304,
+10,zero,B1: global mean score,1.0538717241212785,0.0,2304,
+20,design1,Design 1 (movie mean + magnitude),0.8415482694243926,0.0014003978182995356,2304,0.010271990740740741
+20,tomatometer_z,B2: Tomatometer->score (reviewer fallback),0.8412693512071759,0.0,2304,
+20,critic_mean,B3: mean of all reviewers,0.8264817409017384,0.0,2304,
+20,topk_similar_mean,B4: mean of top-10 similar,0.8647427506217301,0.002909791349785879,2304,
+20,zero,B1: global mean score,1.0538717241212785,0.0,2304,
+50,design1,Design 1 (movie mean + magnitude),0.8247454844402592,0.002482587048080354,2304,0.003761574074074074
+50,tomatometer_z,B2: Tomatometer->score (reviewer fallback),0.8412693512071759,0.0,2304,
+50,critic_mean,B3: mean of all reviewers,0.8264817409017384,0.0,2304,
+50,topk_similar_mean,B4: mean of top-10 similar,0.858838353574903,0.0024451034046802413,2304,
+50,zero,B1: global mean score,1.0538717241212785,0.0,2304,

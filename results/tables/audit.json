@@ -1,0 +1,60 @@
+{
+  "total_review_rows": 1262747,
+  "rows_with_originalScore": 1000876,
+  "rows_parsed": 992954,
+  "parse_rate_of_nonnull": 0.9921,
+  "parse_rate_of_all_rows": 0.7863,
+  "dedup_merges": 5,
+  "data_quality_filter": {
+    "min_critic_movies": 6,
+    "score_levels": 5,
+    "n_critics_with_score_before_filter": 8623,
+    "n_critics_after_filter": 4393,
+    "n_critics_dropped": 4230,
+    "n_rows_before_filter": 1444963,
+    "n_rows_after_filter": 1262747
+  },
+  "critics_ge20_all_time": 2895,
+  "movies_all_time_ge20_scores": 11488,
+  "movies_all_time_ge5_scores": 26381,
+  "scored_reviews_all_time": 992954,
+  "reviews_by_year_tail": {
+    "2018": 52810,
+    "2019": 63583,
+    "2020": 54929,
+    "2021": 54345,
+    "2022": 53354,
+    "2023": 12666
+  },
+  "median_pairwise_overlap_eligible": 0.0,
+  "mean_pairwise_overlap_eligible": 10.03,
+  "p90_pairwise_overlap_eligible": 19.0,
+  "frac_pairs_overlap_ge3": 0.2762,
+  "score_distribution": {
+    "standardized_scale": "0-5 (heterogeneous scales quantized)",
+    "n_scored_reviews": 992954,
+    "score_std_median": 3.0,
+    "score_std_std": 1.08,
+    "score_std_value_counts": {
+      "0": 10116,
+      "1": 61331,
+      "2": 188392,
+      "3": 317755,
+      "4": 338095,
+      "5": 77265
+    },
+    "n_critics_ge20": 2895,
+    "median_within_critic_std_0to5": 0.966,
+    "median_critic_mean_0to5": 3.21,
+    "critic_mean_iqr_0to5": [
+      2.97,
+      3.45
+    ],
+    "n_movies_ge5": 26381,
+    "median_per_movie_dispersion_0to5": 0.808,
+    "z_mean": -0.0,
+    "z_std": 0.999,
+    "median_within_critic_std_z": 1.0,
+    "median_per_movie_dispersion_z": 0.753
+  }
+}

@@ -1,0 +1,30 @@
+Building train split (self-supervised, hist<2021) ...
+  pool=2574, users=2574
+Generating train rows ...
+  342,944 train rows  (126s)
+Building val split (hist<2021, targets 2021) ...
+  363,320 val rows  (242s)
+Building test split (hist<2022, targets 2022-23) ...
+  1,116,648 test rows  (594s)
+Training GBM [main] ...
+  test RMSE 0.7839 (iters 205)
+Training GBM [noprod] ...
+  test RMSE 0.7787 (iters 331)
+Training GBM [top5] ...
+  test RMSE 0.7827 (iters 282)
+Training GBM [rank] ...
+  test RMSE 0.7839 (iters 286)
+Group-wise guard: retraining without test-eligible users ...
+  kept 228,806/342,944 train rows, 20,230/363,320 val rows
+  user-disjoint test RMSE 0.7868
+
+GBM (main) test RMSE by n:
+n
+-1     0.7697
+ 3     0.7969
+ 5     0.7938
+ 10    0.7850
+ 20    0.7770
+ 50    0.7695
+
+Done in 648s

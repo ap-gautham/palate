@@ -1,0 +1,31 @@
+Building validation split (hist<2021, targets 2021) ...
+  pool=2574, users=849, target movies=7373
+k-sweep on validation ...
+k
+3     0.9111
+5     0.9092
+8     0.9084
+12    0.9083
+20    0.9086
+30    0.9089
+  selected k* = 12
+Building test split (hist<2022, targets 2022-23) ...
+  pool=2724, users=909, target movies=7809
+n-sweep on test ...
+  100/909 users, 3s
+  200/909 users, 7s
+  300/909 users, 11s
+  400/909 users, 15s
+  500/909 users, 18s
+  600/909 users, 22s
+  700/909 users, 26s
+  800/909 users, 30s
+  900/909 users, 34s
+method  critic_mean  design1  tomatometer_z  topk_similar_mean    zero
+n                                                                     
+-1           0.8117   0.7825         0.8141             0.8330  0.9844
+ 3           0.8117   1.0152         0.8141             0.8831  0.9844
+ 5           0.8117   0.9765         0.8141             0.8777  0.9844
+ 10          0.8117   0.8979         0.8141             0.8647  0.9844
+ 20          0.8117   0.8372         0.8141             0.8510  0.9844
+ 50          0.8117   0.8031         0.8141             0.8396  0.9844

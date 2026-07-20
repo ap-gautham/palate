@@ -1,0 +1,9 @@
+{
+  "main": {
+    "test_rmse": 0.8031692504882812,
+    "best_iteration": 162
+  },
+  "model": "xgboost",
+  "train_rows": 436533,
+  "test_rows": 41472
+}

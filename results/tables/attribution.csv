@@ -1,0 +1,5 @@
+predictor,rmse,n_episodes,protocol
+1. reviewer mean / movie consensus (B3),0.8502472323106932,4448,all_time_random_holdout
+2. magnitude-scaled movie consensus,0.8327186795476308,4448,all_time_random_holdout
+3. movie-centered signed similarity (mag_sim = 1),0.8672480270788345,4448,all_time_random_holdout
+4. Design 1 (movie mean + signed deviation + mag_sim),0.8501232003486793,4448,all_time_random_holdout

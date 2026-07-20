@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Data — Kaggle source (not redistributable) and regenerable processed parquets
+data/raw/
+data/processed/
+
+# Model binaries — regenerable by the pipeline (design2_xgboost.train, design3_neural.train)
+results/models/
+
+# Scratch and LaTeX build artifacts
+TRASH/
+report/*.aux
+report/*.log
+report/*.out

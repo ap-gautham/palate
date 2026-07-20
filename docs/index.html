@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Palate — critic-matched movie prediction</title>
+<meta name="description" content="Palate predicts your movie rating from professional critics, and honestly measures where personalization helps and where it does not.">
+<style>
+  :root{
+    --bg:#fbfbf9; --surface:#ffffff; --ink:#141413; --muted:#5c5b57;
+    --line:#e7e5df; --accent:#2a78d6; --good:#008300; --violet:#4a3aa7;
+    --warm:#eb6834; --gold:#e8ab20; --code:#f2f1ec;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#131312; --surface:#1c1c1a; --ink:#f2f1ec; --muted:#a8a69d;
+      --line:#2e2d2a; --accent:#5b9be6; --good:#3aa84a; --violet:#9085e9;
+      --warm:#f08a5f; --gold:#f2b943; --code:#232320; }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:860px;margin:0 auto;padding:0 22px}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header{padding:72px 0 40px;border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  h1{font-size:3.1rem;letter-spacing:-.02em;margin:0;font-weight:800}
+  .dot{color:var(--gold)}
+  .tag{color:var(--muted);font-size:1.05rem;font-weight:500}
+  .lead{font-size:1.22rem;line-height:1.55;margin:24px 0 0;max-width:64ch}
+  .lead b{font-weight:650}
+  .cta{margin-top:30px;display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:9px 16px;border-radius:9px;font-size:.94rem;
+    font-weight:600;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn:hover{text-decoration:none;border-color:var(--accent)}
+  section{padding:46px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:1.5rem;letter-spacing:-.01em;margin:0 0 6px}
+  .kicker{color:var(--accent);font-weight:700;font-size:.82rem;letter-spacing:.08em;
+    text-transform:uppercase;margin:0 0 10px}
+  p{margin:.7em 0}
+  .muted{color:var(--muted)}
+  figure{margin:26px 0 6px}
+  figure img{width:100%;height:auto;display:block;border:1px solid var(--line);
+    border-radius:12px;background:var(--surface)}
+  figcaption{color:var(--muted);font-size:.9rem;margin-top:10px}
+  .tablewrap{overflow-x:auto;margin:20px 0 6px}
+  table{border-collapse:collapse;width:100%;font-size:.92rem;min-width:520px}
+  th,td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{color:var(--muted);font-weight:600;border-bottom:1.5px solid var(--line)}
+  tr td.best{color:var(--good);font-weight:700}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:22px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .card h3{margin:0 0 4px;font-size:1.05rem}
+  .card .n{font-variant-numeric:tabular-nums;font-weight:700;font-size:1.35rem}
+  .card.d1 .n{color:var(--accent)} .card.d2 .n{color:var(--good)} .card.d3 .n{color:var(--violet)}
+  .card p{margin:.4em 0 0;font-size:.9rem;color:var(--muted)}
+  .callout{background:var(--code);border:1px solid var(--line);border-left:4px solid var(--gold);
+    border-radius:10px;padding:18px 20px;margin-top:8px}
+  .callout b{color:var(--ink)}
+  .funnel{list-style:none;padding:0;margin:16px 0 0;font-size:.94rem}
+  .funnel li{display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-bottom:1px dashed var(--line)}
+  .funnel li span:last-child{font-variant-numeric:tabular-nums;color:var(--muted)}
+  code{background:var(--code);padding:1px 6px;border-radius:5px;font-size:.86em}
+  footer{padding:38px 0 60px;color:var(--muted);font-size:.9rem}
+  footer a{color:var(--muted);text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">
+    <h1>Palate<span class="dot">.</span></h1>
+    <span class="tag">critic-matched movie prediction</span>
+  </div>
+  <p class="lead">
+    Palate predicts the rating <b>you</b> would give a film from the scores of
+    professional critics — matching you to the reviewers whose taste tracks
+    yours. It is really a measurement project: <b>where does personalization
+    actually beat the flat critic average, and where does it just pretend to?</b>
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="assets/palate-report.pdf">Read the report (PDF)</a>
+    <a class="btn" href="https://github.com/ap-gautham/palate">Source on GitHub</a>
+    <a class="btn" href="https://github.com/ap-gautham/palate/blob/main/DOCUMENTATION.md">Technical docs</a>
+  </div>
+</header>
+
+<section>
+  <p class="kicker">The idea</p>
+  <h2>Critics are the users</h2>
+  <p>
+    The data has no real users, so each of ~3,700 professional critics becomes
+    a stand-in: some of their ratings are "films they have seen", one held-out
+    film is the target, and the target is predicted from the rest of the critic
+    pool. Three designs compete on the exact same held-out films:
+  </p>
+  <div class="cards">
+    <div class="card d1"><h3>Analytic formula</h3><span class="n">0.814</span>
+      <p>An explicit rule: centre each film on its critic mean, then add
+      similarity-weighted, magnitude-scaled deviations.</p></div>
+    <div class="card d2"><h3>XGBoost</h3><span class="n">0.791</span>
+      <p>Gradient-boosted trees over 38 engineered features (similarity deciles,
+      consensus, dispersion, your average).</p></div>
+    <div class="card d3"><h3>Neural network</h3><span class="n">0.793</span>
+      <p>A residual MLP ensemble with a genre embedding, trained on the GPU over
+      the identical features.</p></div>
+  </div>
+  <p class="muted" style="margin-top:14px;font-size:.9rem">
+    Full-history RMSE on the standardized 0–5 rating scale (lower is better).
+  </p>
+</section>
+
+<section>
+  <p class="kicker">The headline</p>
+  <h2>Personalization vs. the flat critic average</h2>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>method</th><th>3</th><th>10</th><th>50</th><th>all</th></tr></thead>
+    <tbody>
+      <tr><td>Tomatometer → score</td><td>0.841</td><td>0.841</td><td>0.841</td><td>0.841</td></tr>
+      <tr><td>Mean of all reviewers</td><td>0.827</td><td>0.827</td><td>0.827</td><td>0.827</td></tr>
+      <tr><td>Analytic formula</td><td>0.957</td><td>0.869</td><td>0.825</td><td>0.814</td></tr>
+      <tr><td>XGBoost</td><td>0.815</td><td>0.805</td><td>0.796</td><td class="best">0.791</td></tr>
+      <tr><td>Neural network</td><td>0.820</td><td>0.809</td><td>0.798</td><td class="best">0.793</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <figure>
+    <img src="assets/plotA_rmse_vs_n.png" alt="RMSE versus the number of films you have rated, for each method">
+    <figcaption>The trained models beat every flat baseline once a profile
+    exists; the analytic formula only overtakes the consensus after ~50 rated
+    films. Baselines are flat because they do not depend on your history.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <p class="kicker">The honest finding</p>
+  <h2>It is calibration, not taste-matching</h2>
+  <div class="callout">
+    <p style="margin-top:0">The ~4% gain over the critic average is almost
+    entirely <b>knowing whether you rate high or low</b> — anchoring the
+    consensus on your own average. An attribution test shows that
+    similarity-based <b>taste-matching</b>, the project's whole premise, adds
+    essentially nothing on top.</p>
+    <p style="margin-bottom:0">Scaling the network wider, deeper, and on twice
+    the data moved the loss by nothing: on these engineered features the ceiling
+    is set by the information in the data, not model capacity. Reported honestly
+    rather than tuned to manufacture a difference.</p>
+  </div>
+  <figure>
+    <img src="assets/plotB_gain_vs_dispersion.png" alt="RMSE improvement over the Tomatometer by how much critics disagree">
+    <figcaption>Where personalization pays, split by how much critics disagree
+    about a film.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <p class="kicker">The data</p>
+  <h2>From 1.4M reviews to a usable matrix</h2>
+  <ul class="funnel">
+    <li><span>Raw critic reviews</span><span>1,444,963</span></li>
+    <li><span>After dropping one-off critics</span><span>4,393 critics</span></li>
+    <li><span>Parsed &amp; standardized scores</span><span>992,954</span></li>
+    <li><span>Pseudo-users (≥10 rated films)</span><span>3,704 critics</span></li>
+    <li><span>Films in the interactive catalog</span><span>1,000</span></li>
+  </ul>
+  <p class="muted" style="margin-top:16px">
+    Every score — 4-star, letter grade, percentage — is standardized onto one
+    0–5 scale before anything else.
+  </p>
+  <figure>
+    <img src="assets/score_distributions.png" alt="Distribution of standardized critic scores">
+    <figcaption>Heterogeneous critic scales collapsed onto six clean levels.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <p class="kicker">Try it</p>
+  <h2>The interactive app</h2>
+  <p>
+    A Streamlit app lets you rate films with clickable stars and watch all three
+    models predict the rest live — then, if you score your prediction films, it
+    tells you <b>which method is closest to your own taste</b>. It runs locally
+    (Streamlit needs a Python server, which static hosting can't provide):
+  </p>
+  <p><code>streamlit run app/streamlit_app.py</code> &nbsp;—&nbsp; see the
+    <a href="https://github.com/ap-gautham/palate#reproduce">README</a> to reproduce end-to-end.</p>
+</section>
+
+<footer>
+  <p>Built from ~1.4M Rotten Tomatoes critic reviews (Kaggle).
+     Each design is a self-contained Python package; all results regenerate from
+     fixed seeds. &nbsp;·&nbsp;
+     <a href="https://github.com/ap-gautham/palate">github.com/ap-gautham/palate</a></p>
+</footer>
+
+</div>
+</body>
+</html>
