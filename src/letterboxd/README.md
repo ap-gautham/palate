@@ -4,10 +4,11 @@ This package mirrors the Rotten Tomatoes project (`src/rotten_tomatoes/`)
 directory-for-directory, while preserving the important data difference: a
 Letterboxd rating is already a direct member score on the integer **1–10**
 scale. There is no score parsing, critic publication, or Tomatometer feature.
-All three designs adopt the same **37-feature similarity-decile contract** as
-RT's Design 2/3 (RT's 38-feature contract minus the Tomatometer), so the two
-projects' Design 2/3 pairs are a fair architectural comparison, not just a
-shared Design 1 formula.
+All three designs adopt the same **similarity-decile-plus-movie-facet
+contract** as RT's Design 2/3 (RT's contract minus the Tomatometer), so the
+two projects' Design 2/3 pairs are a fair architectural comparison, not just a
+shared Design 1 formula. Design 1 also has a second **top-|sim| variant**
+(restricted to the 10 largest-|similarity| peers), identical to RT's.
 
 ## Contract shared with the Rotten Tomatoes project
 
@@ -16,11 +17,19 @@ shared Design 1 formula.
 | Rater | professional critic (pseudo-user) | real Letterboxd member |
 | Rating scale | parsed and standardized 0–5 | native 1–10 |
 | Eligibility | at least 10 scored films | at least 5 rated films |
-| Design 1 | shrunken Pearson neighbourhood + magnitude | same formula |
-| Design 2 | 38-feature XGBoost (incl. Tomatometer) | 37-feature XGBoost (same contract, no Tomatometer) |
+| Design 1 | shrunken Pearson neighbourhood + magnitude, plus a top-\|sim\| variant | same formula and variant |
+| Design 2 | ~111-feature XGBoost (incl. Tomatometer) | ~110-feature XGBoost (same contract, no Tomatometer) |
 | Design 3 | trained residual neural ensemble | trained residual neural ensemble (same architecture) |
 | Evaluation | paired/nested seen-history sweep | paired/nested seen-history sweep (same protocol) |
 | App catalog | 1,000 popular films, live in browser | 1,000 popular films, live in browser |
+
+**Movie facets.** Both catalogs are joined to the `gsimonx37/letterboxd`
+Kaggle metadata dump (genre, theme, studio, director, actor, decade, language,
+country) by normalized (title, year) — see `movie_features.py` — giving every
+trained design a per-member affinity term for each facet, built leave-target-
+out from seen films only. The join matches 94.3% of Letterboxd's full catalog
+and 99.8% of the 1,000-film app catalog (LB's own `movie_id` slug already
+encodes the year, so the join is more reliable here than on RT).
 
 ## Reproduction
 
@@ -44,22 +53,25 @@ films) — no rows are randomly discarded.
 
 Per (member profile, target film) episode: ten deciles of `similarity x
 (rater score - that rater's leave-one-out all-time mean)` — mean, count, and
-std per decile (30 columns) — plus a 7-column tail: `n_observed`,
-`mean_overlap`, `max_overlap`, `n_reviewers`, `dispersion`, `genre_id`,
-`user_mean`. `features.py` provides both a sparse-matrix path (`build_data`,
-`similarity`, `episode_feature_row`, `generate_rows`/`generate_paired_rows`)
-used for training and analysis, and a DataFrame app-path (`app_similarity`,
-`app_features`) used by the browser TypeScript port in
-`web/src/lib/letterboxd/`.
+std per decile (30 columns) — plus a tail of `n_observed`, `mean_overlap`,
+`max_overlap`, `n_reviewers`, `dispersion`, `genre_id`, `user_mean`, an
+8-facet affinity dev/cnt pair (16 columns), a genre+decade multi-hot (51
+columns), and a small numeric tail (runtime, external rating, facet counts) —
+110 columns in total. `features.py` provides both a sparse-matrix path
+(`build_data`, `similarity`, `episode_feature_row`,
+`generate_rows`/`generate_paired_rows`) used for training and analysis, and a
+DataFrame app-path (`app_similarity`, `app_features`) used by the browser
+TypeScript port in `web/src/lib/letterboxd/`. `movie_features.py` builds and
+caches the gsimonx37 join that feeds the facet columns.
 
 ## Design 3: inductive, not transductive
 
 Design 3 is a residual tabular MLP (`network.py`, identical architecture to
-RT's `design3_neural/network.py`) trained on the same 37 engineered features —
-**inductive**, so it scores a brand-new member's live ratings in the browser,
-unlike a member/movie embedding model (which can only predict for members it
-saw during training). It is genuinely trained (`train_neural.py`, a 3-model
-ensemble), not a placeholder.
+RT's `design3_neural/network.py`) trained on the same ~110 engineered
+features — **inductive**, so it scores a brand-new member's live ratings in
+the browser, unlike a member/movie embedding model (which can only predict
+for members it saw during training). It is genuinely trained
+(`train_neural.py`, a 3-model ensemble), not a placeholder.
 
 ## Evaluation and leakage rules
 
@@ -80,19 +92,23 @@ Full-history RMSE (1–10 scale), from `results/letterboxd/nsweep_summary.csv`:
 |---|---:|---:|---:|---:|---:|---:|
 | B1 global mean | 2.108 | 2.108 | 2.108 | 2.108 | 2.108 | 2.108 |
 | B3 mean of all members | 1.639 | 1.639 | 1.639 | 1.639 | 1.639 | 1.639 |
-| B4 mean of top-10 similar | 1.705 | 1.686 | 1.671 | 1.653 | 1.657 | 1.622 |
-| Design 1 analytic | 1.765 | 1.670 | 1.597 | 1.561 | 1.545 | **1.507** |
-| Design 2 XGBoost | 1.663 | 1.609 | 1.588 | 1.562 | 1.533 | **1.501** |
-| Design 3 neural net | 1.676 | 1.620 | 1.593 | 1.561 | 1.543 | **1.515** |
+| B4 mean of top-10 similar | 1.705 | 1.686 | 1.670 | 1.653 | 1.657 | 1.622 |
+| Design 1 analytic (full) | 1.765 | 1.670 | 1.597 | 1.561 | 1.545 | **1.507** |
+| Design 1 analytic (top-\|sim\|) | 1.836 | 1.738 | 1.649 | 1.592 | 1.573 | 1.526 |
+| Design 2 XGBoost | 1.626 | 1.595 | 1.566 | 1.535 | 1.503 | **1.455** |
+| Design 3 neural net | 1.642 | 1.610 | 1.581 | 1.538 | 1.515 | **1.468** |
 
-**This is not directly comparable to RT's RMSE** — Letterboxd's target is 1–10,
-RT's is 0–5, and the two use different (though structurally parallel)
-evaluation populations. Normalizing by rating range
+The top-|sim| variant trails the full-neighbourhood formula at every
+seen-count (1.526 vs. 1.507 full-history) — the same honest negative result
+as on Rotten Tomatoes. **This is not directly comparable to RT's RMSE** —
+Letterboxd's target is 1–10, RT's is 0–5, and the two use different (though
+structurally parallel) evaluation populations. Normalizing by rating range
 (`results/letterboxd/cross_dataset_comparison.csv`) puts them on the same
-footing: RT's normalized RMSE is ~0.158–0.163, Letterboxd's is ~0.167–0.168.
+footing: RT's normalized RMSE is ~0.155–0.162, Letterboxd's is ~0.162–0.170.
 The two are **comparable**, with RT marginally *better* normalized despite its
 sparser critic pseudo-user profiles — an honest result, not a confirmation
-that more (real) rating data produces a lower normalized error here.
+that more (real) rating data produces a lower normalized error here, even with
+the richer movie-facet features added to both.
 
 ## Isolating scale: the z-score track
 
@@ -103,15 +119,17 @@ and the prediction is converted back to the raw 1–10 scale before scoring
 
 | design | raw | z | z − raw |
 |---|---:|---:|---:|
-| Design 1 analytic | 1.507 | 1.640 | +0.134 |
-| Design 2 XGBoost | 1.502 | 1.491 | −0.010 |
-| Design 3 neural net | 1.518 | 1.497 | −0.021 |
+| Design 1 analytic (full) | 1.507 | 1.640 | +0.134 |
+| Design 1 analytic (top-\|sim\|) | 1.526 | 1.528 | +0.001 |
+| Design 2 XGBoost | 1.455 | 1.455 | +0.0004 |
+| Design 3 neural net | 1.468 | 1.464 | −0.004 |
 
 Unlike RT (where the z-track trails raw at every design), Letterboxd's trained
-models (Design 2/3) come out **marginally better** in z-space at full history —
-removing each member's own rating level lets the model spend its capacity on
-the deviation signal instead of re-learning it. The analytic formula, which has
-no learned capacity to reallocate, is worse in z-space. See
+models (Design 2/3) come out **flat-to-slightly-better** in z-space at full
+history, and even the top-|sim| variant is nearly indifferent — removing each
+member's own rating level lets a model with spare capacity spend it on the
+deviation signal instead of re-learning it. The full-neighbourhood analytic
+formula, which has no learned capacity to reallocate, is worse in z-space. See
 `results/letterboxd/figures/plotC_raw_vs_z.png` for the full sweep.
 
 ## Current artifacts

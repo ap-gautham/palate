@@ -108,6 +108,10 @@ button { font: inherit; }
 .sort-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 18px 0 28px; }
 .sort-label { color: var(--muted); font-size: 0.9rem; font-weight: 600; }
 .radio-pill { display: flex; align-items: center; gap: 6px; font-size: 0.92rem; cursor: pointer; }
+.genre-filter { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--muted);
+  font-weight: 600; margin-left: auto; }
+.genre-filter select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 8px; cursor: pointer; }
 
 .card-section { padding: 26px 0; border-top: 1px solid var(--line); }
 .card-section h2 { font-size: 1.2rem; margin: 0 0 12px; }

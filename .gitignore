@@ -4,6 +4,9 @@ __pycache__/
 *.pyc
 .DS_Store
 
+# Claude Code local runtime state
+.claude/
+
 # Data — Kaggle source (not redistributable) and regenerable processed parquets.
 # Symmetric layout: each project keeps its own raw/ + processed/.
 data/rotten_tomatoes/raw/

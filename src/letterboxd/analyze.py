@@ -35,11 +35,38 @@ N_GRID = [3, 5, 10, 20, 50, None]
 N_ORDER = [3, 5, 10, 20, 50, -1]
 N_TICK = ["3", "5", "10", "20", "50", "all"]
 TOPK = 10
+TOPK_ABS = 10   # Design 1 top-|sim| variant: the k largest-|sim| peers, +/-
+
+
+def topk_abs_prediction(sim: np.ndarray, mag: np.ndarray, values: np.ndarray,
+                        k: int = TOPK_ABS) -> float:
+    """A new variation of Design 1 (the full-neighbourhood `analytic` formula
+    below is unchanged): restrict the neighbourhood to the ``k`` raters with
+    the largest |sim| -- both strongly aligned and strongly anti-aligned, not
+    just positively-aligned like the B4 baseline -- then the identical
+    movie-mean-centered, magnitude-scaled formula. Mirrors
+    rotten_tomatoes/design1_analytic/analytic.py's predict_movie_topk_abs,
+    just taking already-sliced per-target peer arrays instead of a Split
+    lookup (this loop already has them). UNCLIPPED -- the raw-track caller
+    clips to [RATING_MIN, RATING_MAX]; the z-track caller must convert back
+    to the raw scale first, exactly like `analytic`/`analytic_z` already do.
+    """
+    if len(values) == 0:
+        return 0.0
+    order = np.argsort(-np.abs(sim))[:k]
+    s, m, v = sim[order], mag[order], values[order]
+    mean_topk = float(v.mean())
+    weight = np.abs(s)
+    den = float(weight.sum())
+    if den <= 0:
+        return mean_topk
+    return float(((weight * mean_topk + s * (v - mean_topk)) * m).sum() / den)
 
 # dataviz palette (matches the RT figures)
-C = {"design1": "#2a78d6", "design2": "#008300", "design3": "#4a3aa7",
+C = {"design1": "#2a78d6", "design1_topk": "#7a4fd6", "design2": "#008300", "design3": "#4a3aa7",
      "critic_mean": "#eda100", "topk_similar_mean": "#1baf7a", "zero": "#e87ba4"}
 LABEL = {"design1": "Design 1 · member mean + magnitude",
+         "design1_topk": "Design 1 · top-|sim| (k=10)",
          "design2": "Design 2 · XGBoost",
          "design3": "Design 3 · neural net",
          "critic_mean": "B3 · mean of all members",
@@ -113,7 +140,7 @@ def nn_predict(ckpt, feats: pd.DataFrame) -> np.ndarray:
 
 
 # ---- evaluation ------------------------------------------------------------
-def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt,
+def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt, fc: F.FacetContext,
              targets_per_user=8, draws=3, n_max_finite=50,
              data_z: F.LBData | None = None, xgb_model_z=None, nn_ckpt_z=None):
     """One pass over paired episodes; returns a records DataFrame with per-method
@@ -138,6 +165,8 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt,
         num = ((weight * consensus + r_sim * (values - consensus)) * r_mag).sum()
         analytic = consensus if weight.sum() == 0 else float(num / weight.sum())
         analytic = float(np.clip(analytic, RATING_MIN, RATING_MAX))
+        topk_abs = float(np.clip(topk_abs_prediction(r_sim, r_mag, values, k=TOPK_ABS),
+                                 RATING_MIN, RATING_MAX))
 
         positive_overlap = overlap[overlap > 0]
         tail = {"n_observed": int(len(seen_cols)),
@@ -147,11 +176,12 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt,
                 "dispersion": float(data.movie_std[target_col]),
                 "genre_id": int(data.genre_id[target_col]),
                 "user_mean": float(np.mean(seen_vals))}
+        tail.update(F.facet_tail_from_context(fc, seen_cols, seen_vals - seen_vals.mean(), target_col))
         feature_rows.append(F.main_feature_row(r_sim, F.target_deviations(data, raters, values), tail))
 
         row = {"member": member, "n": n, "draw": draw, "y": y,
                "zero": b1, "critic_mean": consensus, "topk_similar_mean": b4,
-               "design1": analytic}
+               "design1": analytic, "design1_topk": topk_abs}
 
         if data_z is not None:
             mu = float(np.mean(seen_vals))
@@ -167,8 +197,10 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt,
                     num_z = ((weight_z * consensus_z + rz_sim * (values_z - consensus_z)) * rz_mag).sum()
                     analytic_z = consensus_z if weight_z.sum() == 0 else float(num_z / weight_z.sum())
                     row["design1_z"] = float(np.clip(mu + sigma * analytic_z, RATING_MIN, RATING_MAX))
+                    topk_abs_z = topk_abs_prediction(rz_sim, rz_mag, values_z, k=TOPK_ABS)
+                    row["design1_topk_z"] = float(np.clip(mu + sigma * topk_abs_z, RATING_MIN, RATING_MAX))
 
-                    z_result = F.episode_feature_row_z(data, data_z, seen_cols, seen_vals, target_col, member)
+                    z_result = F.episode_feature_row_z(data, data_z, seen_cols, seen_vals, target_col, member, fc)
                     if z_result is not None:
                         z_row, zmu, zsigma = z_result
                         z_feature_rows.append(z_row)
@@ -183,6 +215,7 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt,
                 z_valid.append(False)
             if not z_valid[-1]:
                 row["design1_z"] = np.nan
+                row["design1_topk_z"] = np.nan
 
         records.append(row)
     rec = pd.DataFrame(records)
@@ -268,7 +301,8 @@ def plot_a(rec, methods):
 def plot_c(rec, methods):
     """Overlay each design's raw track (solid) against its z-score track
     (dashed, converted back to the raw scale) across seen-history n."""
-    z_pairs = [("design1", "design1_z"), ("design2", "design2_z"), ("design3", "design3_z")]
+    z_pairs = [("design1", "design1_z"), ("design1_topk", "design1_topk_z"),
+              ("design2", "design2_z"), ("design3", "design3_z")]
     z_pairs = [(raw, z) for raw, z in z_pairs if raw in methods and z in rec.columns
               and rec[z].notna().any()]
     if not z_pairs:
@@ -342,7 +376,7 @@ def cross_dataset(lb_full: dict):
 def raw_vs_z_table(summ: pd.DataFrame) -> pd.DataFrame:
     """Full-history raw-scale RMSE per design x {raw, z}, side by side."""
     rows = []
-    for design in ["design1", "design2", "design3"]:
+    for design in ["design1", "design1_topk", "design2", "design3"]:
         raw_row = summ[summ["method"] == design]
         z_row = summ[summ["method"] == f"{design}_z"]
         if raw_row.empty:
@@ -369,20 +403,22 @@ def main():
     test_members = parts["test"][:300]
     print(f"built matrix {data.n_members}x{data.n_movies}; {len(test_members)} test members "
           f"({time.time()-started:.0f}s)")
+    fc = F.build_facet_context(movies, data.movies)
 
     xgb_model, nn_ckpt = load_xgb(), load_nn()
     xgb_model_z = load_xgb("letterboxd_xgboost_z.json")
     nn_ckpt_z = load_nn("letterboxd_neural_z.pt")
-    rec = evaluate(data, test_members, xgb_model, nn_ckpt, data_z=data_z,
+    rec = evaluate(data, test_members, xgb_model, nn_ckpt, fc, data_z=data_z,
                    xgb_model_z=xgb_model_z, nn_ckpt_z=nn_ckpt_z)
     print(f"evaluated {len(rec):,} episodes ({time.time()-started:.0f}s)")
 
-    methods = ["zero", "critic_mean", "topk_similar_mean", "design1"]
+    methods = ["zero", "critic_mean", "topk_similar_mean", "design1", "design1_topk"]
     if xgb_model is not None:
         methods.append("design2")
     if nn_ckpt is not None:
         methods.append("design3")
-    z_methods = [f"{m}_z" for m in ["design1", "design2", "design3"] if f"{m}_z" in rec.columns]
+    z_methods = [f"{m}_z" for m in ["design1", "design1_topk", "design2", "design3"]
+                if f"{m}_z" in rec.columns]
 
     sweep = sweep_table(rec, methods + z_methods)
     RESULTS.mkdir(parents=True, exist_ok=True)

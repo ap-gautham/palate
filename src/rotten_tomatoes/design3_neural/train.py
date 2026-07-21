@@ -166,15 +166,17 @@ def main() -> None:
     split = build_split(scored, movies)
     split_z = build_split(scored, movies, value_col="z")
     parts = partition_pseudo_users(split)
+    print("Joining gsimonx37 movie facets (cached after first run) ...")
+    fc = F.build_facet_context(movies, split.tgt_movie_index)
     print("Generating features (raw + z; identical to Design 2 by seed) ...")
     ((tr_x, tr_y, _), (tr_z_x, tr_z_y, _), _, _) = F.generate_rows(
         split, parts["train"], rng, genre_of_movie, N_GRID_TRAIN,
-        TRAIN_PROFILES_PER_N, unknown_genre_id, sp_z=split_z)
+        TRAIN_PROFILES_PER_N, unknown_genre_id, fc, sp_z=split_z)
     ((va_x, va_y, _), (va_z_x, va_z_y, _), _, _) = F.generate_rows(
         split, parts["validation"], rng, genre_of_movie, N_GRID_TRAIN,
-        VALIDATION_PROFILES_PER_N, unknown_genre_id, sp_z=split_z)
+        VALIDATION_PROFILES_PER_N, unknown_genre_id, fc, sp_z=split_z)
     ((te_x, te_y, te_meta), (te_z_x, te_z_y, te_z_meta), te_mu, te_sigma) = F.generate_paired_rows(
-        split, parts["test"], genre_of_movie, unknown_genre_id, sp_z=split_z)
+        split, parts["test"], genre_of_movie, unknown_genre_id, fc, sp_z=split_z)
 
     tr = to_arrays(tr_x, tr_y, None)
     va = to_arrays(va_x, va_y, None)

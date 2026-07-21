@@ -1,11 +1,11 @@
 {
   "main": {
-    "test_rmse": 0.7923645377159119,
-    "best_iteration": 307
+    "test_rmse": 0.7882087826728821,
+    "best_iteration": 417
   },
   "main_z": {
-    "test_rmse": 0.8460506766423911,
-    "best_iteration": 298
+    "test_rmse": 0.8393741335366244,
+    "best_iteration": 656
   },
   "model": "xgboost",
   "train_rows": 358142,

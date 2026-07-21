@@ -1,3 +1,17 @@
+/** Per-facet affinity sets (raw string values, gsimonx37 join), compared by
+ * string-overlap in features.ts -- mirrors the Python frozenset intersection
+ * in rotten_tomatoes/features.py's `_facet_tail`. */
+export interface MovieFacets {
+  genre: string[];
+  decade: string[];
+  theme: string[];
+  language: string[];
+  country: string[];
+  studio: string[];
+  director: string[];
+  actor: string[];
+}
+
 export interface Movie {
   id: string;
   title: string;
@@ -6,6 +20,18 @@ export interface Movie {
   genreId: number;
   tomatometerScore: number | null;
   nScores: number;
+  /** Rich movie-facet payload (genre/theme/studio/director/actor/decade/
+   * language/country) -- see `MovieFacets` and `FACETS` in features.ts. */
+  facets: MovieFacets;
+  /** Fixed-vocab multi-hot ids (genre: 0..30, decade: 0..20) -- same training
+   * vocab as movie_features.GENRE_VOCAB_K/DECADE_VOCAB_K. */
+  genreMh: number[];
+  decadeMh: number[];
+  runtimeLog: number | null;
+  gsRating: number | null;
+  nThemesLog: number;
+  nLanguagesLog: number;
+  nCountriesLog: number;
 }
 
 export interface Critic {

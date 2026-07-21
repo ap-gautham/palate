@@ -1,7 +1,7 @@
 import type { Catalog, Models } from "./types";
 import { computeMatches } from "./matches";
 import { matchStats, buildFeatureRow, buildFeatureRowZ } from "./features";
-import { predictAnalytic, predictAnalyticZ } from "./design1";
+import { predictAnalytic, predictAnalyticZ, predictAnalyticTop10, predictAnalyticTop10Z } from "./design1";
 import { predictXgb } from "../xgboost";
 import { predictNeuralNet } from "../neuralnet";
 import { userStats, convertBack } from "../zscore";
@@ -11,6 +11,7 @@ const Z_RANGE: [number, number] = [-Infinity, Infinity];
 export interface Prediction {
   movieIdx: number;
   analytic: number;
+  analyticTop10: number;
   movieMean: number;
   xgboost: number;
   neuralNet: number;
@@ -18,6 +19,7 @@ export interface Prediction {
    * back to the raw scale. Null when it can't be computed (the user's seen
    * ratings have ~zero variance, or -- per model -- no usable z peers/model). */
   analyticZ: number | null;
+  analyticTop10Z: number | null;
   xgboostZ: number | null;
   neuralNetZ: number | null;
 }
@@ -43,24 +45,32 @@ export function predictAll(
   return targetMovieIdxs.map((movieIdx) => {
     const { prediction: analytic, movieMean } = predictAnalytic(
       catalog, matches, movieIdx, models.ratingMin, models.ratingMax);
-    const row = buildFeatureRow(catalog, matches, stats, movieIdx, userCount, userMean);
+    const { prediction: analyticTop10 } = predictAnalyticTop10(
+      catalog, matches, movieIdx, models.ratingMin, models.ratingMax);
+    const row = buildFeatureRow(catalog, matches, stats, movieIdx, userCount, userMean, seenRatings);
     const xgboost = predictXgb(models.xgb, row, range);
     const neuralNet = predictNeuralNet(models.nn, row, range);
 
     let analyticZ: number | null = null;
+    let analyticTop10Z: number | null = null;
     let xgboostZ: number | null = null;
     let neuralNetZ: number | null = null;
     if (canZ && matchesZ) {
       const az = predictAnalyticZ(catalog, matchesZ, movieIdx, user, range);
       analyticZ = az?.predictionRaw ?? null;
-      const rowZ = buildFeatureRowZ(catalog, matchesZ, stats, movieIdx, userCount);
+      const azTop10 = predictAnalyticTop10Z(catalog, matchesZ, movieIdx, user, range);
+      analyticTop10Z = azTop10?.predictionRaw ?? null;
+      const rowZ = buildFeatureRowZ(catalog, matchesZ, stats, movieIdx, userCount, seenRatings, user);
       if (rowZ) {
         if (models.xgbZ) xgboostZ = convertBack(predictXgb(models.xgbZ, rowZ, Z_RANGE), user, range);
         if (models.nnZ) neuralNetZ = convertBack(predictNeuralNet(models.nnZ, rowZ, Z_RANGE), user, range);
       }
     }
 
-    return { movieIdx, analytic, movieMean, xgboost, neuralNet, analyticZ, xgboostZ, neuralNetZ };
+    return {
+      movieIdx, analytic, analyticTop10, movieMean, xgboost, neuralNet,
+      analyticZ, analyticTop10Z, xgboostZ, neuralNetZ,
+    };
   });
 }
 

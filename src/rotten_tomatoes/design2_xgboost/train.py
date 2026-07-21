@@ -76,20 +76,23 @@ def main() -> None:
     print(f"  train/val/test = {len(parts['train'])}/{len(parts['validation'])}"
           f"/{len(parts['test'])} critics")
 
+    print("Joining gsimonx37 movie facets (cached after first run) ...")
+    fc = F.build_facet_context(movies, split.tgt_movie_index)
+
     print("Generating training rows (raw + z) ...")
     ((tr_x, tr_y, _), (tr_z_x, tr_z_y, _), _, _) = F.generate_rows(
         split, parts["train"], rng, genre_of_movie, N_GRID_TRAIN,
-        TRAIN_PROFILES_PER_N, unknown_genre_id, sp_z=split_z)
+        TRAIN_PROFILES_PER_N, unknown_genre_id, fc, sp_z=split_z)
     print(f"  {len(tr_y):,} train rows ({time.time() - started:.0f}s)")
 
     ((va_x, va_y, _), (va_z_x, va_z_y, _), _, _) = F.generate_rows(
         split, parts["validation"], rng, genre_of_movie, N_GRID_TRAIN,
-        VALIDATION_PROFILES_PER_N, unknown_genre_id, sp_z=split_z)
+        VALIDATION_PROFILES_PER_N, unknown_genre_id, fc, sp_z=split_z)
     print(f"  {len(va_y):,} validation rows ({time.time() - started:.0f}s)")
 
     print("Generating paired test rows (raw + z) ...")
     ((te_x, te_y, te_meta), (te_z_x, te_z_y, te_z_meta), te_mu, te_sigma) = F.generate_paired_rows(
-        split, parts["test"], genre_of_movie, unknown_genre_id, sp_z=split_z)
+        split, parts["test"], genre_of_movie, unknown_genre_id, fc, sp_z=split_z)
     print(f"  {len(te_y):,} test rows ({time.time() - started:.0f}s)")
 
     print("Training XGBoost (raw track) ...")

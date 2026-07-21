@@ -29,6 +29,7 @@ import torch
 
 from .config import MODELS, MOVIES_PARQUET, RATING_MAX, RATING_MIN, RATINGS_PARQUET, SEED
 from . import features as F
+from . import movie_features as MF
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "web" / "public" / "data" / "letterboxd"
@@ -69,10 +70,29 @@ def export_catalog():
     def clean_sigma(v):
         return None if pd.isna(v) or v <= 1e-9 else float(v)
 
+    # Rich movie facets (gsimonx37 join): affinity sets as raw string arrays
+    # (browser compares by string equality, mirroring the Python frozenset
+    # intersection in features.py's _facet_tail), plus genre/decade multi-hot
+    # ids from the SAME fixed training vocab so mh_genre_i/mh_decade_i line up
+    # with the trained models' columns.
+    mf = F.load_project_movie_facets(movies)
+
+    def facets_of(mid):
+        fs = mf.facet_sets.get(mid, {})
+        return {f: sorted(fs.get(f, [])) for f in MF.FACETS}
+
     movies_json = [{
         "id": row.movie_id, "title": row.title if isinstance(row.title, str) and row.title
               else row.movie_id.replace("-", " ").title(),
         "year": clean(row.year), "genreId": int(row.genre_id), "nScores": int(row.n_scores),
+        "facets": facets_of(row.movie_id),
+        "genreMh": mf.genre_multihot.get(row.movie_id, []),
+        "decadeMh": mf.decade_multihot.get(row.movie_id, []),
+        "runtimeLog": clean(mf.runtime_log.get(row.movie_id)),
+        "gsRating": clean(mf.gs_rating.get(row.movie_id)),
+        "nThemesLog": float(np.log1p(mf.n_themes.get(row.movie_id, 0))),
+        "nLanguagesLog": float(np.log1p(mf.n_languages.get(row.movie_id, 0))),
+        "nCountriesLog": float(np.log1p(mf.n_countries.get(row.movie_id, 0))),
     } for row in movie_meta.itertuples()]
 
     members_json = [{

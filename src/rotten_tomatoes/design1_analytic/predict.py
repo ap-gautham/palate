@@ -52,3 +52,26 @@ def predict(target_scores: pd.DataFrame, matches: pd.DataFrame) -> pd.DataFrame:
                                  agg["numerator"] / agg["denominator"],
                                  agg["movie_mean"]).clip(0, 5)
     return agg[["prediction", "movie_mean"]]
+
+
+def predict_topk_abs(target_scores: pd.DataFrame, matches: pd.DataFrame,
+                     k: int = 10) -> pd.DataFrame:
+    """A new variation of Design 1 (the full-neighbourhood formula above is
+    unchanged): restrict each target movie's neighbourhood to the ``k``
+    critics with the largest |sim| (aligned or anti-aligned), then the
+    identical formula. Mirrors web/src/lib/design1.ts:predictAnalyticTop10."""
+    work = target_scores.copy()
+    work["sim"] = work["critic_id"].map(matches["sim"]).fillna(0.0)
+    work["mag_sim"] = work["critic_id"].map(matches["mag_sim"]).fillna(1.0)
+
+    def per_movie(group: pd.DataFrame) -> pd.Series:
+        top = group.reindex(group["sim"].abs().sort_values(ascending=False).index[:k])
+        movie_mean = float(top["score_std"].mean())
+        weight = top["sim"].abs()
+        den = float(weight.sum())
+        num = float(((weight * movie_mean + top["sim"] * (top["score_std"] - movie_mean))
+                     * top["mag_sim"]).sum())
+        prediction = num / den if den > 0 else movie_mean
+        return pd.Series({"prediction": float(np.clip(prediction, 0, 5)), "movie_mean": movie_mean})
+
+    return work.groupby("movie_id", group_keys=False).apply(per_movie, include_groups=False)

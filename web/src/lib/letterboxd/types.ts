@@ -4,12 +4,34 @@
 import type { XgbModel, NNModel } from "../types";
 export type { XgbModel, NNModel, XgbTree, NNLayer, NNMeta } from "../types";
 
+/** Per-facet affinity sets (raw string values, gsimonx37 join), compared by
+ * string-overlap in features.ts. Identical shape to the RT MovieFacets. */
+export interface MovieFacets {
+  genre: string[];
+  decade: string[];
+  theme: string[];
+  language: string[];
+  country: string[];
+  studio: string[];
+  director: string[];
+  actor: string[];
+}
+
 export interface Movie {
   id: string;
   title: string;
   year: number | null;
   genreId: number;
   nScores: number;
+  facets: MovieFacets;
+  /** Fixed-vocab multi-hot ids (genre: 0..30, decade: 0..20). */
+  genreMh: number[];
+  decadeMh: number[];
+  runtimeLog: number | null;
+  gsRating: number | null;
+  nThemesLog: number;
+  nLanguagesLog: number;
+  nCountriesLog: number;
 }
 
 export interface Member {

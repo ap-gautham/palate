@@ -26,6 +26,9 @@ import numpy as np
 import pandas as pd
 import torch
 
+from rotten_tomatoes import features as F
+from rotten_tomatoes import movie_features as MF
+
 ROOT = Path(__file__).resolve().parents[3]
 DATA = ROOT / "data" / "rotten_tomatoes" / "processed"
 MODELS = ROOT / "results" / "rotten_tomatoes" / "models"
@@ -55,12 +58,33 @@ def export_catalog():
     def clean(v):
         return None if pd.isna(v) else (int(v) if float(v).is_integer() else float(v))
 
+    # Rich movie facets (gsimonx37 join): the affinity sets as raw string
+    # arrays (browser computes overlap by string equality, exactly like the
+    # Python frozenset intersection in features.py's _facet_tail), plus the
+    # genre/decade multi-hot ids using the SAME fixed training vocab
+    # (movie_features.GENRE_VOCAB_K/DECADE_VOCAB_K) so mh_genre_i/mh_decade_i
+    # line up with the trained models' columns.
+    full_movies = pd.read_parquet(DATA / "movies.parquet")
+    mf = F.load_project_movie_facets(full_movies)
+
+    def facets_of(mid):
+        fs = mf.facet_sets.get(mid, {})
+        return {f: sorted(fs.get(f, [])) for f in MF.FACETS}
+
     movies_json = [{
         "id": row.movie_id,
         "title": title_from_slug(row.movie_id) if pd.isna(row.title) else row.title,
         "year": clean(row.year), "tomatoMeter": clean(row.tomatoMeter),
         "genreId": int(row.genre_id), "tomatometerScore": clean(row.tomatometer_score),
         "nScores": int(row.n_scores),
+        "facets": facets_of(row.movie_id),
+        "genreMh": mf.genre_multihot.get(row.movie_id, []),
+        "decadeMh": mf.decade_multihot.get(row.movie_id, []),
+        "runtimeLog": clean(mf.runtime_log.get(row.movie_id)),
+        "gsRating": clean(mf.gs_rating.get(row.movie_id)),
+        "nThemesLog": float(np.log1p(mf.n_themes.get(row.movie_id, 0))),
+        "nLanguagesLog": float(np.log1p(mf.n_languages.get(row.movie_id, 0))),
+        "nCountriesLog": float(np.log1p(mf.n_countries.get(row.movie_id, 0))),
     } for row in movies.itertuples()]
 
     def clean_sigma(v):

@@ -59,13 +59,15 @@ def main() -> None:
     parts = F.partition_members(data)
     rng = np.random.default_rng(SEED + 1)
     print(f"built matrix {data.n_members}x{data.n_movies} ({time.time()-started:.0f}s)")
+    print("Joining gsimonx37 movie facets (cached after first run) ...")
+    fc = F.build_facet_context(movies, data.movies)
 
     ((tr_x, tr_y, _), (tr_z_x, tr_z_y, _), _, _) = F.generate_rows(
-        data, parts["train"][:args.train_members], rng, N_GRID, args.profiles_per_n, data_z=data_z)
+        data, parts["train"][:args.train_members], rng, N_GRID, args.profiles_per_n, fc, data_z=data_z)
     ((va_x, va_y, _), (va_z_x, va_z_y, _), _, _) = F.generate_rows(
-        data, parts["validation"][:args.val_members], rng, N_GRID, 2, data_z=data_z)
+        data, parts["validation"][:args.val_members], rng, N_GRID, 2, fc, data_z=data_z)
     ((te_x, te_y, te_meta), (te_z_x, te_z_y, te_z_meta), te_mu, te_sigma) = F.generate_paired_rows(
-        data, parts["test"][:args.test_members], N_GRID, 8, 3, 50, data_z=data_z)
+        data, parts["test"][:args.test_members], N_GRID, 8, 3, 50, fc, data_z=data_z)
     print(f"rows: train {len(tr_y):,} val {len(va_y):,} test {len(te_y):,} "
           f"({time.time()-started:.0f}s)")
 

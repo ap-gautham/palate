@@ -5,18 +5,26 @@ The learned models never see the critic matrix directly; they see, per
 target sorted by similarity and summarized in ten deciles of
 `similarity x (critic score - that critic's leave-one-out mean)`, plus a tail of
 seen count, overlap statistics, mapped Tomatometer, reviewer count, dispersion,
-genre, and the user's mean rating.
+genre, and the user's mean rating -- and, beyond that, a rich movie-facet tail
+(see "rich movie-facet contract" below) built from the gsimonx37/letterboxd
+metadata join (`movie_features.py`): per-facet user affinity (does this user's
+seen history over- or under-rate films sharing this genre/theme/studio/
+director/actor/decade/language/country with the target?) plus a genre/decade
+multi-hot and a small numeric tail (runtime, external rating, facet counts).
 
-This module is self-contained within the design package and is duplicated
-verbatim in design3_neural so the two learned models are trained and scored on
-identical features (a fair comparison). It contains three layers: the pure
-contract (`main_feature_row`), offline generation from a Split
-(`generate_rows`, `generate_paired_rows`), and app-time construction
-(`app_similarity`, `app_features`).
+This module is self-contained within the package and shared verbatim by
+design2_xgboost and design3_neural (imported, not copied) so the two learned
+models are trained and scored on identical features (a fair comparison). It
+contains three layers: the pure contract (`main_feature_row`), offline
+generation from a Split (`generate_rows`, `generate_paired_rows`), and
+app-time construction (`app_similarity`, `app_features`).
 """
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 
+from rotten_tomatoes import movie_features as MF
 from rotten_tomatoes.config import MIN_OTHER_REVIEWERS
 from .pseudo_users import (iter_paired_episodes, sample_random_holdout,
                            similarity, target_ok_mask)
@@ -26,9 +34,137 @@ DECILES = 10
 MAIN_COLS = ([f"d{i}_mean" for i in range(DECILES)]
              + [f"d{i}_cnt" for i in range(DECILES)]
              + [f"d{i}_std" for i in range(DECILES)])
-TAIL_COLS = ["n_observed", "mean_overlap", "max_overlap", "tomatometer",
-             "n_reviewers", "dispersion", "genre_id", "user_mean"]
+
+# ---- rich movie-facet contract (see module docstring) ----------------------
+FACET_DEV_COLS = [f"user_{f}_dev" for f in MF.FACETS]
+FACET_CNT_COLS = [f"user_{f}_cnt" for f in MF.FACETS]
+GENRE_MH_COLS = [f"mh_genre_{i}" for i in range(MF.GENRE_VOCAB_K + 1)]
+DECADE_MH_COLS = [f"mh_decade_{i}" for i in range(MF.DECADE_VOCAB_K + 1)]
+NUMERIC_TAIL_COLS = ["runtime_log", "gs_rating", "n_themes_log", "n_languages_log",
+                     "n_countries_log"]
+FACET_TAIL_COLS = FACET_DEV_COLS + FACET_CNT_COLS + GENRE_MH_COLS + DECADE_MH_COLS + NUMERIC_TAIL_COLS
+
+TAIL_COLS = (["n_observed", "mean_overlap", "max_overlap", "tomatometer",
+              "n_reviewers", "dispersion", "genre_id", "user_mean"]
+             + FACET_TAIL_COLS)
 FEATURE_COLS = MAIN_COLS + TAIL_COLS
+_EMPTY_FACET_SETS = {f: frozenset() for f in MF.FACETS}
+
+
+def _facet_tail(target_facets: dict, target_genre_ids: list, target_decade_ids: list,
+                target_runtime_log: float, target_gs_rating: float,
+                target_n_themes: float, target_n_languages: float,
+                target_n_countries: float, seen_facets_list: list,
+                seen_devs: np.ndarray) -> dict:
+    """Core facet-tail computation, agnostic to whether the caller resolved
+    facets by sparse-matrix position (offline) or by movie_id (app-time). For
+    each facet, the user-affinity pair is the mean deviation (and log1p count)
+    over the *seen* films whose facet set intersects the target's -- built
+    leave-the-target-out by construction, since only seen films are examined.
+    """
+    out = {}
+    for f in MF.FACETS:
+        tgt_set = target_facets.get(f) or frozenset()
+        if not tgt_set:
+            out[f"user_{f}_dev"] = 0.0
+            out[f"user_{f}_cnt"] = 0.0
+            continue
+        hits = [seen_devs[i] for i, sf in enumerate(seen_facets_list)
+               if sf.get(f) and (sf[f] & tgt_set)]
+        out[f"user_{f}_dev"] = float(np.mean(hits)) if hits else 0.0
+        out[f"user_{f}_cnt"] = float(np.log1p(len(hits)))
+
+    genre_vec = [0.0] * len(GENRE_MH_COLS)
+    for gid in target_genre_ids:
+        genre_vec[gid] = 1.0
+    out.update(zip(GENRE_MH_COLS, genre_vec))
+
+    decade_vec = [0.0] * len(DECADE_MH_COLS)
+    for did in target_decade_ids:
+        decade_vec[did] = 1.0
+    out.update(zip(DECADE_MH_COLS, decade_vec))
+
+    out["runtime_log"] = float(target_runtime_log) if np.isfinite(target_runtime_log) else 0.0
+    out["gs_rating"] = float(target_gs_rating) if np.isfinite(target_gs_rating) else 0.0
+    out["n_themes_log"] = float(np.log1p(target_n_themes))
+    out["n_languages_log"] = float(np.log1p(target_n_languages))
+    out["n_countries_log"] = float(np.log1p(target_n_countries))
+    return out
+
+
+@dataclass
+class FacetContext:
+    """Movie facets, position-aligned to a Split's `tgt_movie_index` (so the
+    sparse-matrix episode builders can index by integer position, the same
+    way `sp.tm_z`/`sp.dispersion` already do)."""
+    facet_sets: list          # position -> {facet: frozenset[str]}
+    genre_mh: list             # position -> list[int] genre-vocab ids
+    decade_mh: list            # position -> list[int] decade-vocab ids
+    runtime_log: np.ndarray
+    gs_rating: np.ndarray
+    n_themes: np.ndarray
+    n_languages: np.ndarray
+    n_countries: np.ndarray
+
+
+def load_project_movie_facets(movies: pd.DataFrame):
+    """The movie_id-keyed `movie_features.MovieFacets` for this project (cached
+    after the first run). Used directly by app-time code (`app_features`,
+    predict.py, validators); `build_facet_context` re-indexes the same object
+    to Split positions for the offline sparse-matrix path."""
+    cat, own_genre = MF.prepare_rt_catalog(movies)
+    return MF.load_or_build_movie_facets(cat, own_genre=own_genre)
+
+
+def build_facet_context(movies: pd.DataFrame, tgt_movie_index: pd.Index) -> FacetContext:
+    """Join to gsimonx37 (cached after the first run) and re-index the result
+    to the Split's movie positions."""
+    mf = load_project_movie_facets(movies)
+    ids = list(tgt_movie_index)
+    facet_sets = [mf.facet_sets.get(mid, _EMPTY_FACET_SETS) for mid in ids]
+    genre_mh = [mf.genre_multihot.get(mid, []) for mid in ids]
+    decade_mh = [mf.decade_multihot.get(mid, []) for mid in ids]
+
+    def arr(d: dict, default: float) -> np.ndarray:
+        a = np.array([d.get(mid, default) for mid in ids], dtype=np.float64)
+        if default != default:  # default is NaN -> impute to the column mean
+            finite = a[np.isfinite(a)]
+            fill = float(finite.mean()) if len(finite) else 0.0
+            a[~np.isfinite(a)] = fill
+        return a
+
+    return FacetContext(
+        facet_sets=facet_sets, genre_mh=genre_mh, decade_mh=decade_mh,
+        runtime_log=arr(mf.runtime_log, np.nan),
+        gs_rating=arr(mf.gs_rating, np.nan),
+        n_themes=arr(mf.n_themes, 0.0),
+        n_languages=arr(mf.n_languages, 0.0),
+        n_countries=arr(mf.n_countries, 0.0),
+    )
+
+
+def facet_tail_from_context(fc: FacetContext, seen_cols: np.ndarray,
+                            seen_devs: np.ndarray, target_col: int) -> dict:
+    seen_facets_list = [fc.facet_sets[c] for c in seen_cols]
+    return _facet_tail(fc.facet_sets[target_col], fc.genre_mh[target_col],
+                       fc.decade_mh[target_col], fc.runtime_log[target_col],
+                       fc.gs_rating[target_col], fc.n_themes[target_col],
+                       fc.n_languages[target_col], fc.n_countries[target_col],
+                       seen_facets_list, seen_devs)
+
+
+def facet_tail_from_ids(mf, seen_movie_ids, seen_devs: np.ndarray, target_movie_id) -> dict:
+    """App-time counterpart of `facet_tail_from_context`, keyed by movie_id
+    (the `mf: movie_features.MovieFacets` object) instead of Split position."""
+    seen_facets_list = [mf.facet_sets.get(mid, _EMPTY_FACET_SETS) for mid in seen_movie_ids]
+    return _facet_tail(
+        mf.facet_sets.get(target_movie_id, _EMPTY_FACET_SETS),
+        mf.genre_multihot.get(target_movie_id, []),
+        mf.decade_multihot.get(target_movie_id, []),
+        mf.runtime_log.get(target_movie_id, np.nan),
+        mf.gs_rating.get(target_movie_id, np.nan),
+        mf.n_themes.get(target_movie_id, 0), mf.n_languages.get(target_movie_id, 0),
+        mf.n_countries.get(target_movie_id, 0), seen_facets_list, seen_devs)
 
 
 # ---- pure feature contract ------------------------------------------------
@@ -86,7 +222,7 @@ def target_deviations(sp, critics: np.ndarray, values: np.ndarray) -> np.ndarray
 
 
 def episode_feature_row(sp, upos, seen_cols, seen_values, target_col,
-                        genre_of_movie, unknown_genre_id):
+                        genre_of_movie, unknown_genre_id, fc: FacetContext):
     """Build one feature row for a (seen set, target) episode, or None if the
     target lacks enough other reviewers."""
     sim, overlap, _ = similarity(sp, upos, seen_cols, seen_values)
@@ -104,6 +240,7 @@ def episode_feature_row(sp, upos, seen_cols, seen_values, target_col,
         "genre_id": int(genre_of_movie.get(sp.tgt_movie_index[target_col], unknown_genre_id)),
         "user_mean": float(seen_values.mean()),
     }
+    tail.update(facet_tail_from_context(fc, seen_cols, seen_values - seen_values.mean(), target_col))
     return main_feature_row(sim[critics], target_deviations(sp, critics, values), tail)
 
 
@@ -117,7 +254,7 @@ def episode_feature_row(sp, upos, seen_cols, seen_values, target_col,
 # episode (not an independent draw), the raw seen_cols/seen_values here must
 # come from the raw Split's sampler -- this function only re-expresses them.
 def episode_feature_row_z(sp_raw, sp_z, upos, seen_cols, seen_values, target_col,
-                          genre_of_movie, unknown_genre_id):
+                          genre_of_movie, unknown_genre_id, fc: FacetContext):
     """Like `episode_feature_row`, but in z-space. Returns (row, mu, sigma) or
     None if the target lacks enough other reviewers, or this episode's seen
     ratings have ~zero variance (can't standardize)."""
@@ -141,12 +278,15 @@ def episode_feature_row_z(sp_raw, sp_z, upos, seen_cols, seen_values, target_col
         "genre_id": int(genre_of_movie.get(sp_z.tgt_movie_index[target_col], unknown_genre_id)),
         "user_mean": float(seen_z.mean()),  # ~0 by construction -- the level we removed
     }
+    # seen_z is already ~zero-mean (the level was removed), so it IS the
+    # per-seen-film deviation the facet-affinity tail needs -- no re-centering.
+    tail.update(facet_tail_from_context(fc, seen_cols, seen_z, target_col))
     row = main_feature_row(sim[critics], target_deviations(sp_z, critics, values_z), tail)
     return row, mu, sigma
 
 
 def generate_rows(sp, users, rng, genre_of_movie, n_grid, profiles_per_n,
-                  unknown_genre_id, sp_z=None):
+                  unknown_genre_id, fc: FacetContext, sp_z=None):
     """Training/validation rows: many unpaired random profiles per critic.
 
     If ``sp_z`` is given, also builds the z-track row for the identical
@@ -169,12 +309,12 @@ def generate_rows(sp, users, rng, genre_of_movie, n_grid, profiles_per_n,
                     continue
                 seen_cols, seen_values, target_col, target_value = episode
                 row = episode_feature_row(sp, upos, seen_cols, seen_values,
-                                          target_col, genre_of_movie, unknown_genre_id)
+                                          target_col, genre_of_movie, unknown_genre_id, fc)
                 if row is None:
                     continue
                 if sp_z is not None:
                     z_result = episode_feature_row_z(sp, sp_z, upos, seen_cols, seen_values,
-                                                      target_col, genre_of_movie, unknown_genre_id)
+                                                      target_col, genre_of_movie, unknown_genre_id, fc)
                     if z_result is None:
                         continue
                     z_row, mu, sigma = z_result
@@ -196,7 +336,7 @@ def generate_rows(sp, users, rng, genre_of_movie, n_grid, profiles_per_n,
     return raw_frame
 
 
-def generate_paired_rows(sp, users, genre_of_movie, unknown_genre_id, sp_z=None):
+def generate_paired_rows(sp, users, genre_of_movie, unknown_genre_id, fc: FacetContext, sp_z=None):
     """Test rows on the shared paired, nested episodes (identical keys across
     all designs). See `generate_rows` for the ``sp_z`` contract."""
     rows, targets, meta = [], [], []
@@ -204,12 +344,12 @@ def generate_paired_rows(sp, users, genre_of_movie, unknown_genre_id, sp_z=None)
     for (upos, target_col, target_value, n, draw,
          seen_cols, seen_values) in iter_paired_episodes(sp, users):
         row = episode_feature_row(sp, upos, seen_cols, seen_values, target_col,
-                                  genre_of_movie, unknown_genre_id)
+                                  genre_of_movie, unknown_genre_id, fc)
         if row is None:
             continue
         if sp_z is not None:
             z_result = episode_feature_row_z(sp, sp_z, upos, seen_cols, seen_values,
-                                              target_col, genre_of_movie, unknown_genre_id)
+                                              target_col, genre_of_movie, unknown_genre_id, fc)
             if z_result is None:
                 continue
             z_row, mu, sigma = z_result
@@ -253,13 +393,16 @@ def app_similarity(scores: pd.DataFrame, user: pd.Series, k_shrink: int) -> pd.D
 
 
 def app_features(target_scores: pd.DataFrame, matches: pd.DataFrame,
-                 critics: pd.DataFrame, user: pd.Series):
-    """Build model features for the selected catalog movies. Returns
+                 critics: pd.DataFrame, user: pd.Series, mf):
+    """Build model features for the selected catalog movies. ``mf`` is a
+    `movie_features.MovieFacets` (movie_id-keyed). Returns
     (features_df, movie_ids)."""
     overlap_counts = matches["overlap"].to_numpy()
     positive = overlap_counts[overlap_counts > 0]
     mean_overlap = float(positive.mean()) if len(positive) else 0.0
     max_overlap = float(overlap_counts.max()) if len(overlap_counts) else 0.0
+    seen_movie_ids = list(user.index)
+    seen_devs = user.to_numpy(dtype=float) - float(user.mean())
     rows, movie_ids = [], []
     for movie_id, group in target_scores.groupby("movie_id"):
         peer = critics.reindex(group["critic_id"])
@@ -269,14 +412,16 @@ def app_features(target_scores: pd.DataFrame, matches: pd.DataFrame,
         peer_mean = np.full(len(group), float(values.mean()), dtype=float)
         np.divide(peer_sum, peer_count, out=peer_mean, where=peer_count > 0)
         sim = group["critic_id"].map(matches["sim"]).fillna(0.0).to_numpy()
-        rows.append(main_feature_row(sim, values - peer_mean, {
+        tail = {
             "n_observed": int(len(user)),
             "mean_overlap": mean_overlap, "max_overlap": max_overlap,
             "tomatometer": float(group["tomatometer_score"].iloc[0]),
             "n_reviewers": int(len(group)),
             "dispersion": float(np.std(values, ddof=1)) if len(values) > 1 else 0.0,
             "genre_id": int(group["genre_id"].iloc[0]),
-            "user_mean": float(user.mean())}))
+            "user_mean": float(user.mean())}
+        tail.update(facet_tail_from_ids(mf, seen_movie_ids, seen_devs, movie_id))
+        rows.append(main_feature_row(sim, values - peer_mean, tail))
         movie_ids.append(movie_id)
     features = pd.DataFrame(rows, columns=FEATURE_COLS)
     features["genre_id"] = features["genre_id"].astype(int)

@@ -17,18 +17,30 @@ function labelOf(m: { title: string; year: number | null }) {
   return `${m.title} (${m.year ?? "n/a"})`;
 }
 
+const ALL_GENRES = "";
+
 export function PredictApp({ data }: { data: AppData }) {
   const { catalog, models } = data;
 
   const [sortChoice, setSortChoice] = useState<SortChoice>("title");
+  const [genreFilter, setGenreFilter] = useState<string>(ALL_GENRES);
   const [seenIdxs, setSeenIdxs] = useState<number[]>([]);
   const [seenRatings, setSeenRatings] = useState<Record<number, number>>({});
   const [predictIdxs, setPredictIdxs] = useState<number[]>([]);
   const [predictRatings, setPredictRatings] = useState<Record<number, number>>({});
   const [showMatches, setShowMatches] = useState(false);
 
+  const genreOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of catalog.movies) for (const g of m.facets.genre) set.add(g);
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [catalog]);
+
   const orderedIdxs = useMemo(() => {
-    const idxs = catalog.movies.map((_, i) => i);
+    let idxs = catalog.movies.map((_, i) => i);
+    if (genreFilter !== ALL_GENRES) {
+      idxs = idxs.filter((i) => catalog.movies[i].facets.genre.includes(genreFilter));
+    }
     if (sortChoice === "title") {
       idxs.sort((a, b) => catalog.movies[a].title.localeCompare(catalog.movies[b].title, undefined, { sensitivity: "base" }));
     } else if (sortChoice === "year") {
@@ -37,7 +49,7 @@ export function PredictApp({ data }: { data: AppData }) {
       idxs.sort((a, b) => catalog.movies[b].nScores - catalog.movies[a].nScores);
     }
     return idxs;
-  }, [catalog, sortChoice]);
+  }, [catalog, sortChoice, genreFilter]);
 
   const chosen = useMemo(() => new Set([...seenIdxs, ...predictIdxs]), [seenIdxs, predictIdxs]);
 
@@ -99,6 +111,15 @@ export function PredictApp({ data }: { data: AppData }) {
             {SORT_LABELS[key]}
           </label>
         ))}
+        <label className="genre-filter">
+          Genre
+          <select value={genreFilter} onChange={(e) => setGenreFilter(e.target.value)}>
+            <option value={ALL_GENRES}>All genres</option>
+            {genreOptions.map((g) => (
+              <option key={g} value={g}>{g}</option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <section className="card-section">
@@ -223,6 +244,8 @@ function PredictionsView({
   const candidates: [string, (number | null | undefined)[]][] = [
     ["Analytic (raw)", predictIdxs.map((i) => byIdx.get(i)?.analytic ?? NaN)],
     ["Analytic (z)", predictIdxs.map((i) => byIdx.get(i)?.analyticZ)],
+    ["Analytic top-|sim| (raw)", predictIdxs.map((i) => byIdx.get(i)?.analyticTop10 ?? NaN)],
+    ["Analytic top-|sim| (z)", predictIdxs.map((i) => byIdx.get(i)?.analyticTop10Z)],
     ["XGBoost (raw)", predictIdxs.map((i) => byIdx.get(i)?.xgboost ?? NaN)],
     ["XGBoost (z)", predictIdxs.map((i) => byIdx.get(i)?.xgboostZ)],
     ["Neural net (raw)", predictIdxs.map((i) => byIdx.get(i)?.neuralNet ?? NaN)],
@@ -251,6 +274,7 @@ function PredictionsView({
             <tr>
               <th>Film</th>
               <th>Analytic{hasAnyZ ? " (raw / z)" : ""}</th>
+              <th>Analytic top-|sim|{hasAnyZ ? " (raw / z)" : ""}</th>
               <th>XGBoost{hasAnyZ ? " (raw / z)" : ""}</th>
               <th>Neural net{hasAnyZ ? " (raw / z)" : ""}</th>
               <th>Consensus (mean)</th>
@@ -265,6 +289,7 @@ function PredictionsView({
                 <tr key={idx}>
                   <td>{label(movies[idx])}</td>
                   {cell(p?.analytic, p?.analyticZ)}
+                  {cell(p?.analyticTop10, p?.analyticTop10Z)}
                   {cell(p?.xgboost, p?.xgboostZ)}
                   {cell(p?.neuralNet, p?.neuralNetZ)}
                   <td>{p?.movieMean.toFixed(2)}</td>

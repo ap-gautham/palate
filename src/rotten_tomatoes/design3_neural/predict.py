@@ -14,13 +14,14 @@ def load_checkpoint(path):
 
 
 def predict(scores: pd.DataFrame, user: pd.Series, target_scores: pd.DataFrame,
-            critics: pd.DataFrame, k_shrink: int, ckpt) -> pd.Series:
-    """Return the ensemble-averaged neural-net prediction per target movie_id."""
+            critics: pd.DataFrame, k_shrink: int, ckpt, mf) -> pd.Series:
+    """Return the ensemble-averaged neural-net prediction per target movie_id.
+    ``mf`` is a `movie_features.MovieFacets` (see `features.load_project_movie_facets`)."""
     import torch
     from .network import TabularResNet
 
     matches = F.app_similarity(scores, user, k_shrink)
-    feats, movie_ids = F.app_features(target_scores, matches, critics, user)
+    feats, movie_ids = F.app_features(target_scores, matches, critics, user, mf)
 
     numeric = feats[ckpt["numeric_cols"]].to_numpy(dtype=np.float32).copy()
     genre = feats["genre_id"].to_numpy(dtype=np.int64)

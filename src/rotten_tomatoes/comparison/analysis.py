@@ -32,10 +32,11 @@ GLOBAL_MEAN = (json.loads(_meta_path.read_text())["global_mean"]
                if _meta_path.exists() else 0.0)
 
 # dataviz reference palette (validated, light mode)
-C = {"design1": "#2a78d6", "design2": "#008300", "design3": "#4a3aa7",
+C = {"design1": "#2a78d6", "design1_topk": "#7a4fd6", "design2": "#008300", "design3": "#4a3aa7",
      "tomatometer_z": "#eb6834", "critic_mean": "#eda100",
      "topk_similar_mean": "#1baf7a", "zero": "#e87ba4"}
 LABEL = {"design1": "Design 1 · movie mean + magnitude",
+         "design1_topk": "Design 1 · top-|sim| (k=10)",
          "design2": "Design 2 · XGBoost",
          "design3": "Design 3 · neural net",
          "tomatometer_z": "B2 · Tomatometer → score*",
@@ -78,7 +79,7 @@ def plot_a(rec, d2, d3):
     fig.patch.set_facecolor(SURFACE)
     xs = np.arange(len(N_ORDER))
     curves = {}
-    for m in ["zero", "tomatometer_z", "critic_mean", "topk_similar_mean", "design1"]:
+    for m in ["zero", "tomatometer_z", "critic_mean", "topk_similar_mean", "design1", "design1_topk"]:
         pop2 = pop.copy(); pop2["zero"] = GLOBAL_MEAN
         mean, sd = [], []
         for n in N_ORDER:
@@ -93,10 +94,10 @@ def plot_a(rec, d2, d3):
             pd_r = per_draw_rmse(frame[frame["n"] == n], col)
             mean.append(pd_r.mean()); sd.append(pd_r.std(ddof=0))
         curves[key] = (np.array(mean), np.array(sd))
-    offsets = {"design1": 14, "design2": -14, "design3": 3,
+    offsets = {"design1": 14, "design1_topk": 20, "design2": -14, "design3": 3,
                "topk_similar_mean": 8}
     for m in [k for k in ["zero", "tomatometer_z", "critic_mean",
-                          "topk_similar_mean", "design1", "design2", "design3"]
+                          "topk_similar_mean", "design1", "design1_topk", "design2", "design3"]
               if k in curves]:
         mean, sd = curves[m]
         flat = m in ("zero", "tomatometer_z", "critic_mean")
@@ -196,14 +197,15 @@ def model_summary(rec, d2, d3):
     pop = rec[rec["sampling"] == "pop"]
     full = pop[pop["n"] == -1]
     rows = []
-    for tag in ["design1", "tomatometer_z", "critic_mean", "topk_similar_mean"]:
+    for tag in ["design1", "design1_topk", "tomatometer_z", "critic_mean", "topk_similar_mean"]:
         rows.append({"method": tag, "overall_rmse": rmse(pop[tag] - pop["y"]),
                      "full_history_rmse": rmse(full[tag] - full["y"])})
-    if "design1_z" in pop.columns:
-        valid = pop.dropna(subset=["design1_z"])
-        full_valid = full.dropna(subset=["design1_z"])
-        rows.append({"method": "design1_z", "overall_rmse": rmse(valid["design1_z"] - valid["y"]),
-                     "full_history_rmse": rmse(full_valid["design1_z"] - full_valid["y"])})
+    for tag in ["design1_z", "design1_topk_z"]:
+        if tag in pop.columns:
+            valid = pop.dropna(subset=[tag])
+            full_valid = full.dropna(subset=[tag])
+            rows.append({"method": tag, "overall_rmse": rmse(valid[tag] - valid["y"]),
+                         "full_history_rmse": rmse(full_valid[tag] - full_valid["y"])})
     for tag, frame, col in [("design2", d2, "pred_main"), ("design3", d3, "pred_nn")]:
         if frame is None:
             continue
@@ -224,6 +226,7 @@ def raw_vs_z_table(summ: pd.DataFrame) -> pd.DataFrame:
     """Full-history raw RMSE per design x {raw, z}, side by side."""
     rows = []
     for design, raw_tag, z_tag in [("design1", "design1", "design1_z"),
+                                    ("design1_topk", "design1_topk", "design1_topk_z"),
                                     ("design2", "design2", "design2_z"),
                                     ("design3", "design3", "design3_z")]:
         raw_row = summ[summ["method"] == raw_tag]
@@ -251,6 +254,8 @@ def plot_c(rec, d2, d3):
     fig.patch.set_facecolor(SURFACE)
     xs = np.arange(len(N_ORDER))
     series = [("design1", pop, "design1", "design1_z")]
+    if "design1_topk_z" in pop.columns:
+        series.append(("design1_topk", pop, "design1_topk", "design1_topk_z"))
     if d2 is not None and "pred_main_z" in d2.columns:
         series.append(("design2", d2, "pred_main", "pred_main_z"))
     if d3 is not None and "pred_nn_z" in d3.columns:

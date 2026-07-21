@@ -121,8 +121,10 @@ console.log(JSON.stringify({
   predictions: predictions.map((p) => ({
     movie_id: catalog.movies[p.movieIdx].id,
     analytic: p.analytic, movie_mean: p.movieMean,
+    analytic_topk: p.analyticTop10,
     xgboost: p.xgboost, neural_net: p.neuralNet,
     analytic_z: p.analyticZ, xgboost_z: p.xgboostZ, neural_net_z: p.neuralNetZ,
+    analytic_topk_z: p.analyticTop10Z,
   })),
   top_matches: matches.slice(0, 5).map((m) => ({ critic_id: m.criticId, sim: m.sim, mag_sim: m.magSim, overlap: m.overlap })),
 }, null, 2));

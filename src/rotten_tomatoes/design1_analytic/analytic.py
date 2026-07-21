@@ -48,6 +48,44 @@ def predict_movies(sp: Split, upos: int, sim: np.ndarray, mag_sim: np.ndarray,
     return pred, den, mean_rev, cnts
 
 
+def predict_movie_topk_abs(sp: Split, upos: int, sim: np.ndarray, mag_sim: np.ndarray,
+                          target_col: int, k: int = 10):
+    """A new variation of Design 1 (the full-neighbourhood formula above is
+    unchanged): restrict the neighbourhood to the ``k`` reviewers with the
+    largest |sim| -- both strongly aligned (sim > 0) and strongly
+    anti-aligned (sim < 0) critics, not just positively-aligned ones like
+    `topk_mean`'s baseline -- then apply the identical movie-mean-centered,
+    magnitude-scaled formula from `predict_movies`, restricted to that
+    smaller peer set. One target movie at a time (offline test scoring
+    already calls `predict_movies` per single target).
+
+    Returns (pred, den, mean_of_topk, n_topk). ``pred`` is UNCLIPPED -- the
+    raw-track caller clips to [0, 5]; the z-track caller must convert back to
+    the raw scale (mu + sigma * pred) before clipping, exactly like
+    `predict_movies`/`prediction_for_target_z` already do.
+    """
+    TT = sp.TT
+    lo, hi = TT.indptr[target_col], TT.indptr[target_col + 1]
+    crit = TT.indices[lo:hi]
+    vals = TT.data[lo:hi]
+    keep = crit != upos
+    crit, vals = crit[keep], vals[keep]
+    if len(crit) == 0:
+        return 0.0, 0.0, 0.0, 0
+    s_all = sim[crit]
+    mag_all = np.asarray(mag_sim, dtype=float)[crit].copy()
+    mag_all[~np.isfinite(mag_all)] = 1.0
+    order = np.argsort(-np.abs(s_all))[:k]
+    s, mag, v = s_all[order], mag_all[order], vals[order]
+    mean_topk = float(v.mean())
+    weight = np.abs(s)
+    den = float(weight.sum())
+    if den <= 0:
+        return mean_topk, 0.0, mean_topk, len(order)
+    num = float(((weight * mean_topk + s * (v - mean_topk)) * mag).sum())
+    return float(num / den), den, mean_topk, len(order)
+
+
 def topk_mean(sp: Split, upos: int, sim: np.ndarray, tcols: np.ndarray,
               k: int = 10) -> np.ndarray:
     """Baseline 4: unweighted mean raw score of the k most similar (positively

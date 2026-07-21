@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from rotten_tomatoes.config import MOVIES_PARQUET, REVIEWS_PARQUET, SEED, TABLES, VALUE_COL
-from .analytic import predict_movies, shrink, topk_mean
+from .analytic import predict_movie_topk_abs, predict_movies, shrink, topk_mean
 from rotten_tomatoes.pseudo_users import (Split, build_split, iter_paired_episodes,
                            partition_pseudo_users, rmse, sample_random_holdout,
                            similarity, target_ok_mask)
@@ -23,6 +23,7 @@ K_GRID = [3, 5, 8, 12, 20, 30]
 N_GRID = [3, 5, 10, 20, 50, None]
 VALIDATION_PROFILES = 4
 TOPK_B4 = 10
+TOPK_ABS = 10   # Design 1 top-|sim| variant: the k largest-|sim| peers, +/-
 
 
 def prediction_for_target(sp: Split, upos: int, seen_cols, seen_values,
@@ -33,26 +34,33 @@ def prediction_for_target(sp: Split, upos: int, seen_cols, seen_values,
     target = np.array([target_col])
     pred, denominator, reviewer_mean, _ = predict_movies(sp, upos, sim, mag_sim, target)
     predicted = float(pred[0] if denominator[0] > 0 else reviewer_mean[0])
+    topk_abs_pred, topk_abs_den, topk_abs_mean, _ = predict_movie_topk_abs(
+        sp, upos, sim, mag_sim, target_col, k=TOPK_ABS)
+    topk_abs_prediction = float(np.clip(
+        topk_abs_pred if topk_abs_den > 0 else topk_abs_mean, 0.0, 5.0))
     topk = topk_mean(sp, upos, sim, target, k=TOPK_B4)
     topk_prediction = float(topk[0] if np.isfinite(topk[0]) else reviewer_mean[0])
     tomatometer = sp.tm_z[target_col]
     tomatometer_prediction = float(
         tomatometer if np.isfinite(tomatometer) else reviewer_mean[0])
     return (predicted, bool(denominator[0] <= 0), float(reviewer_mean[0]),
-            topk_prediction, tomatometer_prediction, float(sp.dispersion[target_col]))
+            topk_prediction, tomatometer_prediction, float(sp.dispersion[target_col]),
+            topk_abs_prediction)
 
 
 def prediction_for_target_z(sp_raw: Split, sp_z: Split, upos: int, seen_cols,
                             seen_values_raw, target_col: int, k: int):
     """Design 1 in z-space: standardize THIS episode's seen ratings by their
     own mean/std (never the critic's all-time stats -- a real visitor only has
-    their own seen films), run the identical formula against all-time critic z
-    (``sp_z``), then convert the z-prediction back to the raw scale. Pearson
-    correlation is affine-invariant, so the shrunk similarity itself is
-    unchanged from the raw track; only the magnitude multiplier and the target
-    consensus differ. Returns ``None`` if this episode's seen ratings have
-    ~zero variance (can't standardize) -- reuses the raw track's k* since k
-    only shrinks the (unchanged) correlation, not the magnitude or consensus.
+    their own seen films), run the identical formula (both the full-
+    neighbourhood and top-|sim| variants) against all-time critic z (``sp_z``),
+    then convert the z-prediction back to the raw scale. Pearson correlation is
+    affine-invariant, so the shrunk similarity itself is unchanged from the raw
+    track; only the magnitude multiplier and the target consensus differ.
+    Returns ``None`` if this episode's seen ratings have ~zero variance (can't
+    standardize) -- reuses the raw track's k* since k only shrinks the
+    (unchanged) correlation, not the magnitude or consensus. Returns
+    ``(design1_z, design1_topk_z)``.
     """
     mu = float(seen_values_raw.mean())
     sigma = float(seen_values_raw.std(ddof=0))
@@ -64,7 +72,11 @@ def prediction_for_target_z(sp_raw: Split, sp_z: Split, upos: int, seen_cols,
     target = np.array([target_col])
     pred_z, denominator, reviewer_mean_z, _ = predict_movies(sp_z, upos, sim, mag_sim, target)
     predicted_z = float(pred_z[0] if denominator[0] > 0 else reviewer_mean_z[0])
-    return float(np.clip(mu + sigma * predicted_z, 0.0, 5.0))
+    topk_abs_pred_z, topk_abs_den_z, topk_abs_mean_z, _ = predict_movie_topk_abs(
+        sp_z, upos, sim, mag_sim, target_col, k=TOPK_ABS)
+    topk_abs_predicted_z = topk_abs_pred_z if topk_abs_den_z > 0 else topk_abs_mean_z
+    return (float(np.clip(mu + sigma * predicted_z, 0.0, 5.0)),
+            float(np.clip(mu + sigma * topk_abs_predicted_z, 0.0, 5.0)))
 
 
 def run_validation(sp: Split, users: np.ndarray,
@@ -104,14 +116,17 @@ def run_test(sp: Split, sp_z: Split, users: np.ndarray, k_star: int) -> pd.DataF
     for (upos, target_col, target_value, n, draw,
          seen_cols, seen_values) in iter_paired_episodes(sp, users):
         (predicted, fallback, reviewer_mean, topk_prediction,
-         tomatometer_prediction, dispersion) = prediction_for_target(
+         tomatometer_prediction, dispersion, topk_abs_prediction) = prediction_for_target(
             sp, upos, seen_cols, seen_values, target_col, k_star)
-        predicted_z = prediction_for_target_z(
+        z_result = prediction_for_target_z(
             sp, sp_z, upos, seen_cols, seen_values, target_col, k_star)
+        predicted_z, topk_abs_predicted_z = z_result if z_result is not None else (None, None)
         records.append((upos, target_col, n, draw, "pop", target_value,
                         predicted, fallback, tomatometer_prediction,
                         reviewer_mean, topk_prediction, dispersion, len(seen_cols),
-                        np.nan if predicted_z is None else predicted_z))
+                        np.nan if predicted_z is None else predicted_z,
+                        topk_abs_prediction,
+                        np.nan if topk_abs_predicted_z is None else topk_abs_predicted_z))
         if upos != last_user:
             last_user, n_users = upos, n_users + 1
             if n_users % 100 == 0:
@@ -119,7 +134,7 @@ def run_test(sp: Split, sp_z: Split, users: np.ndarray, k_star: int) -> pd.DataF
     return pd.DataFrame(records, columns=[
         "user", "tcol", "n", "draw", "sampling", "y", "design1", "fallback",
         "tomatometer_z", "critic_mean", "topk_similar_mean", "dispersion", "n_seen",
-        "design1_z"])
+        "design1_z", "design1_topk", "design1_topk_z"])
 
 
 def summarize(records: pd.DataFrame, global_mean: float) -> pd.DataFrame:
@@ -128,6 +143,8 @@ def summarize(records: pd.DataFrame, global_mean: float) -> pd.DataFrame:
     methods = {
         "design1": "Design 1 (movie mean + magnitude)",
         "design1_z": "Design 1, z-score track (converted back to raw)",
+        "design1_topk": "Design 1, top-|sim| variant (k=10, raw)",
+        "design1_topk_z": "Design 1, top-|sim| variant (k=10, z-score track)",
         "tomatometer_z": "B2: Tomatometer->score (reviewer fallback)",
         "critic_mean": "B3: mean of all reviewers",
         "topk_similar_mean": "B4: mean of top-10 similar",
@@ -137,7 +154,7 @@ def summarize(records: pd.DataFrame, global_mean: float) -> pd.DataFrame:
     pop["zero"] = global_mean
     for n, group in pop.groupby("n"):
         for method, label in methods.items():
-            valid = group.dropna(subset=[method, "y"]) if method == "design1_z" else group
+            valid = group.dropna(subset=[method, "y"]) if method.endswith("_z") else group
             per_draw = valid.groupby("draw").apply(
                 lambda draw: rmse(draw[method] - draw["y"]), include_groups=False)
             rows.append({"n": n, "method": method, "label": label,

@@ -1,6 +1,56 @@
-import type { Catalog, CriticMatch } from "./types";
+import type { Catalog, CriticMatch, MovieFacets } from "./types";
 
 const DECILES = 10;
+
+// Mirrors rotten_tomatoes/movie_features.py's FACETS/GENRE_VOCAB_K/DECADE_VOCAB_K.
+const FACETS = ["genre", "decade", "theme", "language", "country", "studio", "director", "actor"] as const;
+const GENRE_MH_WIDTH = 31;   // GENRE_VOCAB_K + 1
+const DECADE_MH_WIDTH = 21;  // DECADE_VOCAB_K + 1
+
+/** Per-facet user-affinity tail (mean deviation + log1p count on seen films
+ * sharing a facet with the target) plus the genre/decade multi-hot and
+ * numeric tail. Mirrors rotten_tomatoes/features.py's `_facet_tail` exactly;
+ * ``seenIdxs``/``seenDevs`` are parallel arrays (raw: rating - user mean;
+ * z-track: the seen z-value, already ~zero-mean by construction). */
+function facetTail(
+  catalog: Catalog,
+  seenIdxs: number[],
+  seenDevs: number[],
+  targetMovieIdx: number
+): Record<string, number> {
+  const target = catalog.movies[targetMovieIdx];
+  const row: Record<string, number> = {};
+  for (const f of FACETS) {
+    const targetSet = target.facets[f];
+    if (!targetSet || targetSet.length === 0) {
+      row[`user_${f}_dev`] = 0;
+      row[`user_${f}_cnt`] = 0;
+      continue;
+    }
+    const targetLookup = new Set(targetSet);
+    let sum = 0;
+    let cnt = 0;
+    for (let i = 0; i < seenIdxs.length; i++) {
+      const seenSet = catalog.movies[seenIdxs[i]].facets[f];
+      if (seenSet && seenSet.some((v) => targetLookup.has(v))) {
+        sum += seenDevs[i];
+        cnt++;
+      }
+    }
+    row[`user_${f}_dev`] = cnt ? sum / cnt : 0;
+    row[`user_${f}_cnt`] = Math.log1p(cnt);
+  }
+  for (let i = 0; i < GENRE_MH_WIDTH; i++) row[`mh_genre_${i}`] = 0;
+  for (const gid of target.genreMh) row[`mh_genre_${gid}`] = 1;
+  for (let i = 0; i < DECADE_MH_WIDTH; i++) row[`mh_decade_${i}`] = 0;
+  for (const did of target.decadeMh) row[`mh_decade_${did}`] = 1;
+  row.runtime_log = target.runtimeLog ?? 0;
+  row.gs_rating = target.gsRating ?? 0;
+  row.n_themes_log = target.nThemesLog;
+  row.n_languages_log = target.nLanguagesLog;
+  row.n_countries_log = target.nCountriesLog;
+  return row;
+}
 
 /** Mirrors design2_xgboost/features.py:decile_features -- summarize
  * similarity x deviation in ten similarity-ranked deciles (numpy array_split
@@ -58,7 +108,8 @@ export function buildFeatureRow(
   stats: MatchStats,
   targetMovieIdx: number,
   userCount: number,
-  userMean: number
+  userMean: number,
+  seenRatings: Map<number, number>
 ): Record<string, number> {
   const rows = catalog.byMovie[targetMovieIdx];
   const critics = catalog.critics;
@@ -103,6 +154,9 @@ export function buildFeatureRow(
   row.dispersion = dispersion;
   row.genre_id = movie.genreId;
   row.user_mean = userMean;
+  const seenIdxs = Array.from(seenRatings.keys());
+  const seenDevs = seenIdxs.map((i) => seenRatings.get(i)! - userMean);
+  Object.assign(row, facetTail(catalog, seenIdxs, seenDevs, targetMovieIdx));
   return row;
 }
 
@@ -121,7 +175,9 @@ export function buildFeatureRowZ(
   matches: Map<number, CriticMatch>,
   stats: MatchStats,
   targetMovieIdx: number,
-  userCount: number
+  userCount: number,
+  seenRatings: Map<number, number>,
+  user: { mu: number; sigma: number }
 ): Record<string, number> | null {
   const rows = catalog.byMovie[targetMovieIdx];
   const critics = catalog.critics;
@@ -169,5 +225,8 @@ export function buildFeatureRowZ(
   row.dispersion = dispersion;
   row.genre_id = movie.genreId;
   row.user_mean = 0; // ~0 by construction -- the level we removed
+  const seenIdxs = Array.from(seenRatings.keys());
+  const seenZDevs = seenIdxs.map((i) => (seenRatings.get(i)! - user.mu) / user.sigma);
+  Object.assign(row, facetTail(catalog, seenIdxs, seenZDevs, targetMovieIdx));
   return row;
 }

@@ -25,7 +25,7 @@ files, or trained models.
 | target scale | parsed to 0–5 | native 1–10 |
 | eligibility floor | ≥10 scored films | ≥5 rated films |
 | Design 1 | analytic critic-match formula | analytic member-match formula (same formula) |
-| Design 2 | XGBoost (incl. Tomatometer) | XGBoost (same 37-feature contract, no Tomatometer) |
+| Design 2 | XGBoost (incl. Tomatometer) | XGBoost (same ~110-feature contract, no Tomatometer) |
 | Design 3 | trained residual-MLP ensemble | trained residual-MLP ensemble (same architecture) |
 | interactive catalog | 1,000 popular films, live in browser | 1,000 popular films, live in browser |
 
@@ -33,10 +33,22 @@ There are no real per-user histories in the Rotten Tomatoes source data, so
 each eligible critic is treated as a pseudo-user: sampled ratings are "movies
 they've seen," a different rated movie is the unseen target. Letterboxd has
 genuine per-member histories instead. Both designs 2/3 share the identical
-37-feature similarity-decile contract (minus Rotten Tomatoes' Tomatometer
-feature), so their Design 2/3 pairs are a fair architectural comparison, not
-just a shared Design 1 formula. See [`src/letterboxd/README.md`](src/letterboxd/README.md)
-for the Letterboxd-specific contract and commands.
+~110-feature similarity-decile-plus-movie-facet contract (minus Rotten
+Tomatoes' Tomatometer feature), so their Design 2/3 pairs are a fair
+architectural comparison, not just a shared Design 1 formula. See
+[`src/letterboxd/README.md`](src/letterboxd/README.md) for the
+Letterboxd-specific contract and commands.
+
+**Movie facets.** Both catalogs are joined (by normalized title + year) to the
+`gsimonx37/letterboxd` Kaggle metadata dump — genre, theme, studio, director,
+actor, decade, language, country (posters excluded, unneeded) — giving every
+trained model a per-user affinity term for each facet ("this user over-rates
+A24 films," not just "this user and critic X agree"), built leave-target-out
+from seen films only. Design 1 also gets a new **top-|sim| variant**: instead
+of the full peer neighbourhood, it restricts to the 10 peers with the largest
+`|similarity|` (aligned *or* anti-aligned), computed identically for both
+datasets. It underperforms the full formula on both — a negative result,
+reported as found rather than tuned away.
 
 ## Headline results
 
@@ -45,17 +57,19 @@ report for the full per-`n` tables and figures):
 
 | design | Rotten Tomatoes (0–5) | Letterboxd (1–10) |
 |---|---:|---:|
-| Design 1 analytic | 0.796 | 1.507 |
-| Design 2 XGBoost | 0.775 | 1.502 |
-| Design 3 neural net | 0.773 | 1.518 |
+| Design 1 analytic (full neighbourhood) | 0.796 | 1.507 |
+| Design 1 analytic (top-\|sim\| variant) | 0.808 | 1.526 |
+| Design 2 XGBoost | 0.770 | 1.455 |
+| Design 3 neural net | 0.776 | 1.468 |
 
 **Honest cross-dataset finding.** The two scales aren't directly comparable,
 so normalizing by rating range (`RMSE / (max − min)`) puts them on the same
-footing — Rotten Tomatoes (~0.155–0.169) and Letterboxd (~0.167–0.180) come out
+footing — Rotten Tomatoes (~0.155–0.162) and Letterboxd (~0.162–0.170) come out
 **comparable**, with Rotten Tomatoes marginally *better* despite its far
 sparser critic pseudo-user profiles. Letterboxd's real value is dense,
 genuine per-member histories, not a lower headline RMSE — "more real data
-performs much better" is not supported by this matched-protocol comparison.
+performs much better" is not supported by this matched-protocol comparison,
+even with the richer movie-facet features added to both.
 
 **Isolating scale (the z-score experiment).** Both projects also train a
 parallel z-score track: each rater is standardized to their own scale (the
@@ -63,9 +77,11 @@ model predicts pure *deviation*, not level), and predictions are converted
 back to the raw scale before scoring — the direct test of whether the RMSE
 gain above is level-calibration or genuine taste-matching. The result is
 **not uniform**: on Rotten Tomatoes the z-track trails raw at every design
-(design1 +0.130, design2 +0.008, design3 +0.015 RMSE); on Letterboxd the
-trained models (design2/3) come out *slightly better* in z-space (−0.010,
-−0.021) while the analytic formula is worse (+0.134) — reported as found. See
+(full formula +0.130, top-\|sim\| +0.009, design2 +0.008, design3 +0.005
+RMSE); on Letterboxd the trained models come out *flat-to-slightly-better* in
+z-space (design2 +0.0004, design3 −0.004), the top-\|sim\| variant is nearly
+indifferent (+0.001), while the full-neighbourhood formula is worse (+0.134)
+— reported as found. See
 `results/{rotten_tomatoes,letterboxd}/raw_vs_z.csv` / `plotC_raw_vs_z.png` and
 the report for the full breakdown.
 
@@ -73,22 +89,25 @@ the report for the full breakdown.
 
 Built with Vite + React + TypeScript (`web/`), hosted as a static GitHub Pages
 site from `docs/` — no server. The app defaults to the interactive tab, with a
-dataset switcher between Rotten Tomatoes and Letterboxd. **All three models,
-raw and z-score variants, for both datasets, run client-side in the
-browser**: each analytic formula is plain arithmetic, each XGBoost model is a
+dataset switcher between Rotten Tomatoes and Letterboxd. **All four model
+variants (analytic full, analytic top-\|sim\|, XGBoost, neural net), each with
+raw and z-score tracks, for both datasets, run client-side in the browser**:
+each analytic formula is plain arithmetic, each XGBoost model is a
 from-scratch JSON tree-walker (`web/src/lib/xgboost.ts`, shared by both
 datasets via a parameterized clamp range), and each neural net is a
 hand-written forward pass (`web/src/lib/neuralnet.ts`, also shared) over the
-ensemble's raw weights. Rotten Tomatoes' export lives under
-`src/rotten_tomatoes/web_export/export.py`; Letterboxd's mirrors it at
-`src/letterboxd/web_export.py`. Both TypeScript ports are checked against
-their Python inference paths in `web/scripts/validate*.ts` (the analytic
-formula matches to float precision; the trained models agree to within
-~0.01–0.05 on their respective scales — see the comment in each project's
-`features.ts` for why).
+ensemble's raw weights — including the movie-facet affinity computation
+(`web/src/lib/features.ts`), ported from Python's `_facet_tail`. Rotten
+Tomatoes' export lives under `src/rotten_tomatoes/web_export/export.py`;
+Letterboxd's mirrors it at `src/letterboxd/web_export.py`. Both TypeScript
+ports are checked against their Python inference paths in
+`web/scripts/validate*.ts` (the analytic formulas match to float precision;
+the trained models agree within a documented tie-break tolerance — see the
+comment in each project's `features.ts` for why).
 
 Each catalog holds its **1,000 most-rated films**; a sort control orders the
-search lists alphabetically (default), by year, or by rating count, and the
+search lists alphabetically (default), by year, or by rating count, a
+**genre filter** narrows the list to a single gsimonx37 genre, and the
 dropdown scrolls through every match rather than truncating. Three sections:
 **films you've seen** (star widget for Rotten Tomatoes, a 1–10 stepper for
 Letterboxd), **films to predict** (scoring optional), and **predictions** —
@@ -106,6 +125,14 @@ cd ../web && npm install && npm run build   # writes into docs/
 ```
 
 ## Reproduce
+
+Both projects' movie-facet join reads `gsimonx37/letterboxd` (Kaggle) —
+`movies.csv`, `genres.csv`, `themes.csv`, `studios.csv`, `actors.csv`,
+`crew.csv`, `countries.csv`, `languages.csv` (skip the posters file, it's
+unused and huge) — placed once in `data/letterboxd/raw/gsimonx37/` and read
+independently by both projects. The join result is cached to
+`data/{project}/processed/movie_facets.pkl` after the first run (a ~1–2
+minute join over the full catalog); delete the cache to force a rebuild.
 
 Rotten Tomatoes (place the Kaggle CSVs in `data/rotten_tomatoes/raw/`):
 
