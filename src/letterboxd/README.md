@@ -104,7 +104,7 @@ as on Rotten Tomatoes. **This is not directly comparable to RT's RMSE** —
 Letterboxd's target is 1–10, RT's is 0–5, and the two use different (though
 structurally parallel) evaluation populations. Normalizing by rating range
 (`results/letterboxd/cross_dataset_comparison.csv`) puts them on the same
-footing: RT's normalized RMSE is ~0.155–0.162, Letterboxd's is ~0.162–0.170.
+footing: RT's normalized RMSE is ~0.154–0.162, Letterboxd's is ~0.162–0.170.
 The two are **comparable**, with RT marginally *better* normalized despite its
 sparser critic pseudo-user profiles — an honest result, not a confirmation
 that more (real) rating data produces a lower normalized error here, even with

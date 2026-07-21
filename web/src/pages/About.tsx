@@ -243,7 +243,7 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
           <p style={{ marginTop: 0, marginBottom: 0 }}>
             <b>Honest cross-dataset finding:</b> raw RMSE isn't comparable across a 0–5 scale and a 1–10 scale, so
             normalizing by rating range (RMSE ÷ range) puts them on the same footing. Rotten Tomatoes normalizes to
-            ~0.155–0.162; Letterboxd normalizes to ~0.162–0.170 — <b>comparable</b>, with Rotten Tomatoes actually
+            ~0.154–0.162; Letterboxd normalizes to ~0.162–0.170 — <b>comparable</b>, with Rotten Tomatoes actually
             slightly <i>better</i> despite its far sparser critic pseudo-user profiles. More real rating data did{" "}
             <b>not</b> translate into a lower normalized error here. Letterboxd's genuine value is dense real-member
             histories, not a lower headline RMSE — reported as found, not tuned to confirm the hypothesis.

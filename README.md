@@ -64,7 +64,7 @@ report for the full per-`n` tables and figures):
 
 **Honest cross-dataset finding.** The two scales aren't directly comparable,
 so normalizing by rating range (`RMSE / (max − min)`) puts them on the same
-footing — Rotten Tomatoes (~0.155–0.162) and Letterboxd (~0.162–0.170) come out
+footing — Rotten Tomatoes (~0.154–0.162) and Letterboxd (~0.162–0.170) come out
 **comparable**, with Rotten Tomatoes marginally *better* despite its far
 sparser critic pseudo-user profiles. Letterboxd's real value is dense,
 genuine per-member histories, not a lower headline RMSE — "more real data
@@ -124,13 +124,14 @@ prediction. The neighbour-list length (`k_neighbors`) was itself tuned: a
 paired-episode sweep (`rotten_tomatoes.design1_analytic.similar_k_sweep`,
 `letterboxd.similar_k_sweep`) bucketed 6,000 held-out predictions by how many
 of the target's k nearest neighbours were already in the rater's seen set,
-for `k_neighbors` ∈ {10, 20, 30}. Rotten Tomatoes showed a clean RMSE decline
-as similar-seen count rose, with `k=20` clearly best (RMSE 1.121 at ≥3
-similar films seen, n=43, vs. `k=30`'s 1.525/n=99 and `k=10`'s
-barely-sampled 3.966/n=7). Letterboxd's own sweep was noisier and did not
+for `k_neighbors` ∈ {10, 20, 30}. On Rotten Tomatoes RMSE trends down (noisily,
+non-monotonically) as the similar-seen count rises, and the episode-weighted
+RMSE across the ≥3-similar-seen buckets is lowest at `k=20` (1.121, n=43, vs.
+`k=30`'s 1.525/n=99 and `k=10`'s barely-sampled 3.966/n=7) — modest evidence,
+but pointing to `k=20`. Letterboxd's own sweep was noisier still and did not
 cleanly discriminate among the three values at this sample size — reported
 honestly rather than forced to agree — so `k_neighbors=20` was set for both
-projects on the strength of Rotten Tomatoes' cleaner result. See
+projects on the strength of Rotten Tomatoes' (relatively) cleaner result. See
 `results/{rotten_tomatoes,letterboxd}/similar_k_sweep.csv` and the report's
 "Similar-film suggestions" section for the full breakdown.
 

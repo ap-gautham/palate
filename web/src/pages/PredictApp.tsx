@@ -165,7 +165,7 @@ export function PredictApp({ data }: { data: AppData }) {
           onRemove={removePredict}
           label={labelOf}
           emptyText="No films added yet."
-          suggestions={(idx) => catalog.similar[idx] ?? []}
+          suggestions={(idx) => (catalog.similar[idx] ?? []).filter((j) => !predictIdxs.includes(j))}
           onAddSuggestion={addSeen}
           seenSet={new Set(seenIdxs)}
         />

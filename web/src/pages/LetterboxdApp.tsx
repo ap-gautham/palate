@@ -172,7 +172,7 @@ export function LetterboxdApp({ data }: { data: LetterboxdData }) {
           emptyText="No films added yet."
           scoreMax={10}
           renderRating={(value, onChange) => <RatingInput value={value} onChange={onChange} />}
-          suggestions={(idx) => catalog.similar[idx] ?? []}
+          suggestions={(idx) => (catalog.similar[idx] ?? []).filter((j) => !predictIdxs.includes(j))}
           onAddSuggestion={addSeen}
           seenSet={new Set(seenIdxs)}
         />
