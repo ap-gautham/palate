@@ -61,3 +61,7 @@ for mid, ja, pa, jx, px, jn, pn in rows[:12]:
 print("\nmax abs diffs (JS vs Python):", max_diffs)
 assert all(v < 1e-3 for v in max_diffs.values()), "port mismatch!"
 print("\nOK: TypeScript port matches Python to < 1e-3 on every prediction.")
+# Note: this script only checks the raw track. The z track's TS port
+# (matches.ts/features.ts/design1.ts) reuses the exact same functions and
+# formulas as the raw track (see their docstrings), so it is not
+# independently re-verified here.

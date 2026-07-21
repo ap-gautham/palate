@@ -5,7 +5,8 @@
     10.0
   ],
   "ensemble_size": 3,
-  "test_rows": 16290,
-  "rmse": 1.5926678163160524,
-  "mean_member_val_rmse": 1.671707272529602
+  "test_rows": 16045,
+  "rmse": 1.5909382354087391,
+  "rmse_z": 1.721291173339427,
+  "mean_member_val_rmse": 1.6686229308446248
 }

@@ -19,9 +19,6 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
           <a className="btn" href="https://github.com/ap-gautham/palate">
             Source on GitHub
           </a>
-          <a className="btn" href="https://github.com/ap-gautham/palate/blob/main/DOCUMENTATION.md">
-            Technical docs
-          </a>
         </div>
       </header>
 
@@ -36,7 +33,7 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
         <div className="cards">
           <div className="card d1">
             <h3>Analytic formula</h3>
-            <span className="n">0.814</span>
+            <span className="n">0.796</span>
             <p>
               An explicit rule: centre each film on its critic mean, then add similarity-weighted,
               magnitude-scaled deviations.
@@ -44,7 +41,7 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
           </div>
           <div className="card d2">
             <h3>XGBoost</h3>
-            <span className="n">0.791</span>
+            <span className="n">0.775</span>
             <p>
               Gradient-boosted trees over 38 engineered features (similarity deciles, consensus, dispersion, your
               average).
@@ -52,7 +49,7 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
           </div>
           <div className="card d3">
             <h3>Neural network</h3>
-            <span className="n">0.793</span>
+            <span className="n">0.773</span>
             <p>A residual MLP ensemble with a genre embedding, trained on the GPU over the identical features.</p>
           </div>
         </div>
@@ -79,38 +76,38 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
             <tbody>
               <tr>
                 <td>Tomatometer → score</td>
-                <td>0.841</td>
-                <td>0.841</td>
-                <td>0.841</td>
-                <td>0.841</td>
+                <td>0.830</td>
+                <td>0.830</td>
+                <td>0.830</td>
+                <td>0.830</td>
               </tr>
               <tr>
                 <td>Mean of all reviewers</td>
-                <td>0.827</td>
-                <td>0.827</td>
-                <td>0.827</td>
-                <td>0.827</td>
+                <td>0.826</td>
+                <td>0.826</td>
+                <td>0.826</td>
+                <td>0.826</td>
               </tr>
               <tr>
                 <td>Analytic formula</td>
-                <td>0.957</td>
-                <td>0.869</td>
-                <td>0.825</td>
-                <td>0.814</td>
+                <td>0.964</td>
+                <td>0.864</td>
+                <td>0.811</td>
+                <td>0.796</td>
               </tr>
               <tr>
                 <td>XGBoost</td>
                 <td>0.815</td>
-                <td>0.805</td>
-                <td>0.796</td>
-                <td className="best">0.791</td>
+                <td>0.795</td>
+                <td>0.780</td>
+                <td className="best">0.775</td>
               </tr>
               <tr>
                 <td>Neural network</td>
-                <td>0.820</td>
-                <td>0.809</td>
-                <td>0.798</td>
-                <td className="best">0.793</td>
+                <td>0.815</td>
+                <td>0.795</td>
+                <td>0.778</td>
+                <td className="best">0.773</td>
               </tr>
             </tbody>
           </table>
@@ -162,12 +159,12 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
           </div>
           <div className="card d2">
             <h3>XGBoost</h3>
-            <span className="n">1.501</span>
+            <span className="n">1.502</span>
             <p>Same 37-feature contract as Design 2 (identical minus the Tomatometer feature).</p>
           </div>
           <div className="card d3">
             <h3>Neural network</h3>
-            <span className="n">1.515</span>
+            <span className="n">1.518</span>
             <p>Same residual-MLP architecture as Design 3 — genuinely trained, not a placeholder.</p>
           </div>
         </div>
@@ -189,10 +186,71 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
           <p style={{ marginTop: 0, marginBottom: 0 }}>
             <b>Honest cross-dataset finding:</b> raw RMSE isn't comparable across a 0–5 scale and a 1–10 scale, so
             normalizing by rating range (RMSE ÷ range) puts them on the same footing. Rotten Tomatoes normalizes to
-            ~0.158–0.163; Letterboxd normalizes to ~0.167–0.168 — <b>comparable</b>, with Rotten Tomatoes actually
+            ~0.155–0.159; Letterboxd normalizes to ~0.167–0.169 — <b>comparable</b>, with Rotten Tomatoes actually
             slightly <i>better</i> despite its far sparser critic pseudo-user profiles. More real rating data did{" "}
             <b>not</b> translate into a lower normalized error here. Letterboxd's genuine value is dense real-member
             histories, not a lower headline RMSE — reported as found, not tuned to confirm the hypothesis.
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <p className="kicker">Isolating scale</p>
+        <h2>Is the gain calibration, or genuine taste-matching?</h2>
+        <p>
+          Both projects also train a parallel <b>z-score track</b>: every rater is standardized to their own scale
+          (the model predicts pure <i>deviation</i>, not level), and every prediction is converted back to the raw
+          scale before scoring — a direct test of whether the RMSE gain above is level-calibration or real
+          taste-matching. Both tracks run live in the app; the predictions table shows raw and z-score side by side
+          and marks whichever is closest to your own score.
+        </p>
+        <div className="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>design</th>
+                <th>RT raw</th>
+                <th>RT z</th>
+                <th>LB raw</th>
+                <th>LB z</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Analytic formula</td>
+                <td>0.796</td>
+                <td>0.926</td>
+                <td>1.507</td>
+                <td>1.640</td>
+              </tr>
+              <tr>
+                <td>XGBoost</td>
+                <td>0.775</td>
+                <td>0.783</td>
+                <td>1.502</td>
+                <td className="best">1.491</td>
+              </tr>
+              <tr>
+                <td>Neural network</td>
+                <td>0.773</td>
+                <td>0.788</td>
+                <td>1.518</td>
+                <td className="best">1.497</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="muted small" style={{ marginTop: 14 }}>
+          Full-history RMSE, both tracks on their raw scale (lower is better).
+        </p>
+        <div className="callout" style={{ marginTop: 20 }}>
+          <p style={{ marginTop: 0, marginBottom: 0 }}>
+            The result is <b>not uniform</b>. On Rotten Tomatoes the z-track trails raw at every design — removing
+            the Tomatometer-anchored level costs more than the deviation-only target gains. On Letterboxd the trained
+            models come out <i>slightly better</i> in z-space, while the analytic formula (no learned capacity to
+            reallocate) is worse either way. Even where z helps, the gain is under 1.5% — an order of magnitude
+            smaller than raw calibration's gain over the flat baselines above. Calibration, not taste-matching,
+            remains the dominant effect. Reported as found, not tuned to confirm either hypothesis.
           </p>
         </div>
       </section>

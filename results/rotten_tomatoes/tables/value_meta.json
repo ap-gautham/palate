@@ -1,6 +1,6 @@
 {
   "value_col": "score_std",
-  "global_mean": 3.1516995056940322,
+  "global_mean": 3.1500619112922306,
   "protocol": "all_time_random_holdout",
-  "n_pseudo_users": 3704
+  "n_pseudo_users": 2894
 }

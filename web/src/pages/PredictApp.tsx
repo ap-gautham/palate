@@ -215,22 +215,33 @@ function PredictionsView({
 }) {
   const byIdx = new Map(predictions.map((p) => [p.movieIdx, p]));
   const hasAnyScore = predictIdxs.some((i) => predictRatings[i] != null);
+  const hasAnyZ = predictions.some((p) => p.analyticZ != null || p.xgboostZ != null || p.neuralNetZ != null);
 
-  const analyticArr = predictIdxs.map((i) => byIdx.get(i)?.analytic ?? NaN);
-  const xgbArr = predictIdxs.map((i) => byIdx.get(i)?.xgboost ?? NaN);
-  const nnArr = predictIdxs.map((i) => byIdx.get(i)?.neuralNet ?? NaN);
-  const meanArr = predictIdxs.map((i) => byIdx.get(i)?.movieMean ?? NaN);
   const truth = predictIdxs.map((i) => predictRatings[i] ?? NaN);
   const nScored = truth.filter((t) => !Number.isNaN(t)).length;
 
-  const candidates: [string, number[]][] = [
-    ["Analytic formula", analyticArr],
-    ["XGBoost", xgbArr],
-    ["Neural net", nnArr],
-    ["Consensus mean", meanArr],
+  const candidates: [string, (number | null | undefined)[]][] = [
+    ["Analytic (raw)", predictIdxs.map((i) => byIdx.get(i)?.analytic ?? NaN)],
+    ["Analytic (z)", predictIdxs.map((i) => byIdx.get(i)?.analyticZ)],
+    ["XGBoost (raw)", predictIdxs.map((i) => byIdx.get(i)?.xgboost ?? NaN)],
+    ["XGBoost (z)", predictIdxs.map((i) => byIdx.get(i)?.xgboostZ)],
+    ["Neural net (raw)", predictIdxs.map((i) => byIdx.get(i)?.neuralNet ?? NaN)],
+    ["Neural net (z)", predictIdxs.map((i) => byIdx.get(i)?.neuralNetZ)],
+    ["Consensus mean", predictIdxs.map((i) => byIdx.get(i)?.movieMean ?? NaN)],
   ];
-  const rows = candidates.map(([name, arr]) => [name, mse(arr, truth)] as const);
+  const rows = candidates
+    .filter(([name]) => hasAnyZ || !name.endsWith("(z)"))
+    .map(([name, arr]) => [name, mse(arr, truth)] as const);
   const best = rows.reduce((b, r) => (r[1] != null && (b[1] == null || r[1] < b[1]) ? r : b), rows[0]);
+
+  function cell(raw: number | undefined, z: number | null | undefined) {
+    return (
+      <td>
+        {raw?.toFixed(2) ?? "—"}
+        {hasAnyZ && <span className="z-variant">{z != null ? ` / ${z.toFixed(2)}` : " / —"}</span>}
+      </td>
+    );
+  }
 
   return (
     <>
@@ -239,9 +250,9 @@ function PredictionsView({
           <thead>
             <tr>
               <th>Film</th>
-              <th>Analytic</th>
-              <th>XGBoost</th>
-              <th>Neural net</th>
+              <th>Analytic{hasAnyZ ? " (raw / z)" : ""}</th>
+              <th>XGBoost{hasAnyZ ? " (raw / z)" : ""}</th>
+              <th>Neural net{hasAnyZ ? " (raw / z)" : ""}</th>
               <th>Consensus (mean)</th>
               <th>Tomatometer</th>
               {hasAnyScore && <th>Your score</th>}
@@ -253,9 +264,9 @@ function PredictionsView({
               return (
                 <tr key={idx}>
                   <td>{label(movies[idx])}</td>
-                  <td>{p?.analytic.toFixed(2)}</td>
-                  <td>{p?.xgboost.toFixed(2)}</td>
-                  <td>{p?.neuralNet.toFixed(2)}</td>
+                  {cell(p?.analytic, p?.analyticZ)}
+                  {cell(p?.xgboost, p?.xgboostZ)}
+                  {cell(p?.neuralNet, p?.neuralNetZ)}
                   <td>{p?.movieMean.toFixed(2)}</td>
                   <td>{p?.tomatometer != null ? `${p.tomatometer}%` : "—"}</td>
                   {hasAnyScore && <td>{predictRatings[idx] != null ? `${predictRatings[idx]}/5` : "—"}</td>}
@@ -265,6 +276,12 @@ function PredictionsView({
           </tbody>
         </table>
       </div>
+      {hasAnyZ && (
+        <p className="muted small">
+          Each method's second number is its z-score variant: predicted from your own rating scale's variation only
+          (level removed), then converted back.
+        </p>
+      )}
 
       <h3 className="best-predictor-heading">Which method predicts <em>you</em> best?</h3>
       {nScored === 0 ? (

@@ -20,7 +20,10 @@ TRASH/
 report/*.aux
 report/*.log
 report/*.out
+report/*.fls
+report/*.fdb_latexmk
 
 # Web app -- node_modules and validation scratch; docs/ (the built site) is committed
 web/node_modules/
 web/js_validate_out.json
+web/js_validate_lb_out.json

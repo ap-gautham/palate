@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 
-from . import features as F
+from rotten_tomatoes import features as F
 
 
 def load_model(path):

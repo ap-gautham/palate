@@ -11,8 +11,8 @@ member scale.
 Self-contained: this module never imports Rotten Tomatoes code. It offers a
 sparse-matrix path (``build_data`` + ``similarity`` + ``episode_feature_row`` +
 row generators) used for training and analysis, and a DataFrame app-path
-(``app_similarity`` + ``app_features``) used by the Streamlit app and mirrored
-by the browser TypeScript port.
+(``app_similarity`` + ``app_features``) used by and mirrored in the browser
+TypeScript port.
 """
 from __future__ import annotations
 
@@ -112,12 +112,36 @@ class LBData:
         return len(self.movies)
 
 
-def build_data(ratings: pd.DataFrame, movies: pd.DataFrame) -> LBData:
+def build_data(ratings: pd.DataFrame, movies: pd.DataFrame, value: str = "raw") -> LBData:
+    """``value="z"`` builds the PEER matrix from each member's all-time z-score
+    instead of their raw rating -- members are indexed identically either way,
+    so a raw-built and a z-built LBData share row/column positions (see
+    rotten_tomatoes.pseudo_users.build_split's docstring for why this matters:
+    it's what lets the z-score track reuse a peer matrix built in z-units
+    while the user's own seen ratings are standardized per-episode instead,
+    see episode_feature_row_z). Members with ~zero all-time rating variance
+    get z=0 (a neutral, information-free peer contribution) rather than being
+    dropped, since LBData's row/column set must stay identical across both
+    builds.
+    """
     members = pd.Index(ratings.user_id.drop_duplicates())
     movie_ids = pd.Index(ratings.movie_id.drop_duplicates())
     ui = pd.Categorical(ratings.user_id, categories=members).codes
     mi = pd.Categorical(ratings.movie_id, categories=movie_ids).codes
-    values = ratings.rating.to_numpy(float)
+    raw_values = ratings.rating.to_numpy(float)
+    if value == "z":
+        member_sum_raw = np.bincount(ui, weights=raw_values, minlength=len(members))
+        member_count_raw = np.bincount(ui, minlength=len(members)).astype(float)
+        member_mu_raw = member_sum_raw / np.maximum(member_count_raw, 1)
+        member_sqsum_raw = np.bincount(ui, weights=raw_values ** 2, minlength=len(members))
+        member_var_raw = np.maximum(
+            member_sqsum_raw / np.maximum(member_count_raw, 1) - member_mu_raw ** 2, 0)
+        member_sigma_raw = np.sqrt(member_var_raw)
+        safe_sigma = np.where(member_sigma_raw > 1e-9, member_sigma_raw, 1.0)
+        values = np.where(member_sigma_raw[ui] > 1e-9,
+                          (raw_values - member_mu_raw[ui]) / safe_sigma[ui], 0.0)
+    else:
+        values = raw_values
     mat = sparse.csr_matrix((values, (ui, mi)), shape=(len(members), len(movie_ids)))
     mask = mat.copy()
     mask.data[:] = 1.0
@@ -211,6 +235,42 @@ def episode_feature_row(data: LBData, seen_cols: np.ndarray, seen_vals: np.ndarr
     return main_feature_row(sim[raters], target_deviations(data, raters, values), tail)
 
 
+# ---- z-score track: isolate variation from each member's own rating level --
+# The user (fake profile offline, or the real visitor in the app) is
+# standardized by the mean/std of THIS EPISODE's own sampled seen ratings --
+# never by the member's all-time mu/sigma, since a real visitor only ever has
+# their own seen films to standardize against. Peers (the target film's other
+# raters) are standardized by their all-time mu/sigma (``data_z``, built with
+# value="z"). Mirrors rotten_tomatoes/features.py's episode_feature_row_z.
+def episode_feature_row_z(data_raw: LBData, data_z: LBData, seen_cols: np.ndarray,
+                          seen_vals: np.ndarray, target_col: int,
+                          exclude_member: int | None):
+    """Like `episode_feature_row`, but in z-space. Returns (row, mu, sigma) or
+    None if the target lacks enough other raters, or this episode's seen
+    ratings have ~zero variance (can't standardize)."""
+    mu = float(seen_vals.mean())
+    sigma = float(seen_vals.std(ddof=0))
+    if sigma <= 1e-9:
+        return None
+    seen_z = (seen_vals - mu) / sigma
+    sim, _, overlap = similarity(data_z, seen_cols, seen_z, exclude_member)
+    raters, values_z = target_raters(data_z, target_col, exclude_member)
+    if len(raters) < MIN_OTHER_REVIEWERS:
+        return None
+    positive_overlap = overlap[overlap > 0]
+    tail = {
+        "n_observed": int(len(seen_cols)),
+        "mean_overlap": float(positive_overlap.mean()) if len(positive_overlap) else 0.0,
+        "max_overlap": float(overlap.max()) if len(overlap) else 0.0,
+        "n_reviewers": int(len(raters)),
+        "dispersion": float(data_z.movie_std[target_col]),
+        "genre_id": int(data_z.genre_id[target_col]),
+        "user_mean": float(seen_z.mean()),  # ~0 by construction
+    }
+    row = main_feature_row(sim[raters], target_deviations(data_z, raters, values_z), tail)
+    return row, mu, sigma
+
+
 # ---- episode generation ----------------------------------------------------
 def eligible_members(data: LBData, min_ratings: int) -> np.ndarray:
     return np.flatnonzero(data.member_count >= min_ratings)
@@ -228,9 +288,17 @@ def partition_members(data: LBData, min_ratings: int = 6, seed: int = SEED):
 
 
 def generate_rows(data: LBData, members: np.ndarray, rng: np.random.Generator,
-                  n_grid, profiles_per_n: int):
-    """Unpaired random-holdout rows for train/val (label = held-out rating)."""
+                  n_grid, profiles_per_n: int, data_z: LBData | None = None):
+    """Unpaired random-holdout rows for train/val (label = held-out rating).
+
+    If ``data_z`` is given, also builds the z-track row for the identical
+    sampled episode, so raw and z rows are drawn from the same distribution.
+    Returns ``(raw_frame, z_frame, mu, sigma)`` in that case, else just
+    ``raw_frame``. An episode is dropped from BOTH tracks if either row is
+    unavailable, keeping the two tracks exactly aligned.
+    """
     rows, targets, meta = [], [], []
+    z_rows, z_targets, z_meta, mus, sigmas = [], [], [], [], []
     mat_csr = data.mat_csc.tocsr()
     for i, member in enumerate(members):
         member = int(member)
@@ -247,17 +315,33 @@ def generate_rows(data: LBData, members: np.ndarray, rng: np.random.Generator,
                 order = rng.permutation(len(films))
                 target_pos = int(order[0])
                 seen_pos = order[1:size + 1]
-                row = episode_feature_row(data, films[seen_pos], film_vals[seen_pos],
-                                          int(films[target_pos]), member)
+                seen_cols, seen_vals = films[seen_pos], film_vals[seen_pos]
+                target_col, target_value = int(films[target_pos]), float(film_vals[target_pos])
+                row = episode_feature_row(data, seen_cols, seen_vals, target_col, member)
                 if row is None:
                     continue
+                if data_z is not None:
+                    z_result = episode_feature_row_z(data, data_z, seen_cols, seen_vals,
+                                                      target_col, member)
+                    if z_result is None:
+                        continue
+                    z_row, mu, sigma = z_result
+                    z_rows.append(z_row)
+                    z_targets.append((target_value - mu) / sigma)
+                    z_meta.append((member, target_col, -1 if n is None else n, len(seen_pos)))
+                    mus.append(mu)
+                    sigmas.append(sigma)
                 rows.append(row)
-                targets.append(float(film_vals[target_pos]))
-                meta.append((member, int(films[target_pos]), -1 if n is None else n,
+                targets.append(target_value)
+                meta.append((member, target_col, -1 if n is None else n,
                              len(seen_pos)))
         if (i + 1) % 500 == 0:
             print(f"  rows: {i + 1}/{len(members)} members")
-    return _frame(rows, targets, meta)
+    raw_frame = _frame(rows, targets, meta)
+    if data_z is not None:
+        z_frame = _frame(z_rows, z_targets, z_meta)
+        return raw_frame, z_frame, np.asarray(mus, dtype=np.float64), np.asarray(sigmas, dtype=np.float64)
+    return raw_frame
 
 
 def iter_paired_episodes(data: LBData, members: np.ndarray, n_grid,
@@ -295,17 +379,34 @@ def iter_paired_episodes(data: LBData, members: np.ndarray, n_grid,
 
 
 def generate_paired_rows(data: LBData, members: np.ndarray, n_grid,
-                         targets_per_user: int, draws: int, n_max_finite: int):
+                         targets_per_user: int, draws: int, n_max_finite: int,
+                         data_z: LBData | None = None):
+    """See `generate_rows` for the ``data_z`` contract."""
     rows, targets, meta = [], [], []
+    z_rows, z_targets, z_meta, mus, sigmas = [], [], [], [], []
     for (member, target_col, target_value, n, draw, seen_cols, seen_vals) in \
             iter_paired_episodes(data, members, n_grid, targets_per_user, draws, n_max_finite):
         row = episode_feature_row(data, seen_cols, seen_vals, target_col, member)
         if row is None:
             continue
+        if data_z is not None:
+            z_result = episode_feature_row_z(data, data_z, seen_cols, seen_vals, target_col, member)
+            if z_result is None:
+                continue
+            z_row, mu, sigma = z_result
+            z_rows.append(z_row)
+            z_targets.append((target_value - mu) / sigma)
+            z_meta.append((member, target_col, n, draw, len(seen_cols)))
+            mus.append(mu)
+            sigmas.append(sigma)
         rows.append(row)
         targets.append(target_value)
         meta.append((member, target_col, n, draw, len(seen_cols)))
-    return _frame(rows, targets, meta)
+    raw_frame = _frame(rows, targets, meta)
+    if data_z is not None:
+        z_frame = _frame(z_rows, z_targets, z_meta)
+        return raw_frame, z_frame, np.asarray(mus, dtype=np.float64), np.asarray(sigmas, dtype=np.float64)
+    return raw_frame
 
 
 def _frame(rows, targets, meta):

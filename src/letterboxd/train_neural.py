@@ -3,12 +3,17 @@
 1-10 member scale.
 
 Inductive by construction: it predicts from engineered features of a member's
-seen profile, so it scores brand-new users live in the browser and Streamlit
-(unlike a transductive embedding model). Trains a small seeded ensemble on the
-Apple GPU (MPS) when available. Self-contained and isolated from RT.
+seen profile, so it scores brand-new users live in the browser (unlike a
+transductive embedding model). Trains a small seeded ensemble on the Apple GPU
+(MPS) when available. Self-contained and isolated from RT.
+
+Also trains a second, z-score-track ensemble: the target and peer features are
+expressed in z-space (each rater standardized by their own scale -- the user
+side by THIS episode's own seen-set mean/std, never a member's all-time
+stats), and predictions are converted back to the raw scale before scoring.
 
 Run from src/:  python -m letterboxd.train_neural
-Outputs: results/letterboxd/models/letterboxd_neural.pt (+ meta),
+Outputs: results/letterboxd/models/letterboxd_neural{,_z}.pt (+ meta),
          results/letterboxd/neural_results.json
 """
 from __future__ import annotations
@@ -73,7 +78,7 @@ def predict(model, numeric, genre, device):
         nb = torch.from_numpy(numeric[start:start + 16384]).to(device)
         gb = torch.from_numpy(genre[start:start + 16384]).to(device)
         out.append(model(nb, gb).cpu().numpy())
-    return np.clip(np.concatenate(out), RATING_MIN, RATING_MAX)
+    return np.concatenate(out)  # clip happens after any z convert-back
 
 
 def train_one(seed, tr, va, n_genres, device):
@@ -101,8 +106,10 @@ def train_one(seed, tr, va, n_genres, device):
             opt.step()
         model.eval()
         with torch.no_grad():
-            val_rmse = rmse(np.clip(model(va_num_t, va_gen_t).cpu().numpy(),
-                                    RATING_MIN, RATING_MAX), va_y)
+            val_pred = model(va_num_t, va_gen_t).cpu().numpy()
+        # Unclipped: va_y is raw [1,10] for the raw track but unbounded
+        # z-space for the z track, so a single clip boundary can't serve both.
+        val_rmse = rmse(val_pred, va_y)
         sched.step(val_rmse)
         if val_rmse < best_val - 1e-5:
             best_val, stale = val_rmse, 0
@@ -112,6 +119,21 @@ def train_one(seed, tr, va, n_genres, device):
         if stale >= PATIENCE:
             break
     return best_state, best_val, epoch
+
+
+def train_ensemble(tr_p, va_p, te_num, te_gen, n_genres, device, ensemble_size, seed_offset=0):
+    states, val_scores = [], []
+    ens = np.zeros(len(te_num), dtype=np.float64)
+    for member in range(ensemble_size):
+        state, best_val, epochs = train_one(SEED + seed_offset + member, tr_p, va_p, n_genres, device)
+        states.append(state)
+        val_scores.append(best_val)
+        model = TabularResNet(len(NUMERIC_COLS), n_genres, EMB_DIM, WIDTH, DEPTH, DROPOUT).to(device)
+        model.load_state_dict(state)
+        member_pred = predict(model, te_num, te_gen, device)
+        ens += member_pred
+        print(f"  member {member+1}/{ensemble_size}: val {best_val:.4f}, {epochs+1} epochs")
+    return ens / ensemble_size, states, val_scores
 
 
 def main() -> None:
@@ -133,40 +155,53 @@ def main() -> None:
     _, genre_to_id, unknown_genre_id = F.make_genre_maps(movies)
     n_genres = len(genre_to_id)
     data = F.build_data(ratings, movies)
+    data_z = F.build_data(ratings, movies, value="z")
     parts = F.partition_members(data)
     rng = np.random.default_rng(SEED + 1)
     print(f"built matrix {data.n_members}x{data.n_movies} ({time.time()-started:.0f}s)")
 
-    tr = to_arrays(*F.generate_rows(data, parts["train"][:args.train_members], rng,
-                                    N_GRID, args.profiles_per_n))
-    va = to_arrays(*F.generate_rows(data, parts["validation"][:args.val_members], rng,
-                                    N_GRID, 2))
-    te = to_arrays(*F.generate_paired_rows(data, parts["test"][:args.test_members],
-                                           N_GRID, 8, 3, 50))
+    ((tr_x, tr_y, _), (tr_z_x, tr_z_y, _), _, _) = F.generate_rows(
+        data, parts["train"][:args.train_members], rng, N_GRID, args.profiles_per_n, data_z=data_z)
+    ((va_x, va_y, _), (va_z_x, va_z_y, _), _, _) = F.generate_rows(
+        data, parts["validation"][:args.val_members], rng, N_GRID, 2, data_z=data_z)
+    ((te_x, te_y, te_meta), (te_z_x, te_z_y, te_z_meta), te_mu, te_sigma) = F.generate_paired_rows(
+        data, parts["test"][:args.test_members], N_GRID, 8, 3, 50, data_z=data_z)
+
+    tr = to_arrays(tr_x, tr_y, None)
+    va = to_arrays(va_x, va_y, None)
+    te = to_arrays(te_x, te_y, te_meta)
+    tr_z = to_arrays(tr_z_x, tr_z_y, None)
+    va_z = to_arrays(va_z_x, va_z_y, None)
+    te_z = to_arrays(te_z_x, te_z_y, te_z_meta)
+
     tr_num, tr_gen, tr_y, _ = tr
     va_num, va_gen, va_y, _ = va
     te_num, te_gen, te_y, te_meta = te
+    tr_z_num, tr_z_gen, tr_z_y, _ = tr_z
+    va_z_num, va_z_gen, va_z_y, _ = va_z
+    te_z_num, te_z_gen, te_z_y, te_z_meta = te_z
     print(f"rows: train {len(tr_y):,} val {len(va_y):,} test {len(te_y):,} "
           f"({time.time()-started:.0f}s)")
 
     tr_num, va_num, te_num, mu_impute, mu, sd = preprocess(tr_num, va_num, te_num)
-    tr_p, va_p = (tr_num, tr_gen, tr_y), (va_num, va_gen, va_y)
+    tr_z_num, va_z_num, te_z_num, mu_impute_z, mu_z, sd_z = preprocess(tr_z_num, va_z_num, te_z_num)
 
-    states, val_scores = [], []
-    ens = np.zeros(len(te_y), dtype=np.float64)
-    for member in range(args.ensemble):
-        state, best_val, epochs = train_one(SEED + member, tr_p, va_p, n_genres, device)
-        states.append(state)
-        val_scores.append(best_val)
-        model = TabularResNet(len(NUMERIC_COLS), n_genres, EMB_DIM, WIDTH, DEPTH, DROPOUT).to(device)
-        model.load_state_dict(state)
-        member_pred = predict(model, te_num, te_gen, device)
-        ens += member_pred
-        print(f"  member {member+1}/{args.ensemble}: val {best_val:.4f}, "
-              f"test {rmse(member_pred, te_y):.4f}, {epochs+1} epochs ({time.time()-started:.0f}s)")
-    ens /= args.ensemble
+    print("Training raw-track ensemble ...")
+    ens, states, val_scores = train_ensemble(
+        (tr_num, tr_gen, tr_y), (va_num, va_gen, va_y), te_num, te_gen,
+        n_genres, device, args.ensemble, seed_offset=0)
+    ens = np.clip(ens, RATING_MIN, RATING_MAX)
     test_rmse = rmse(ens, te_y)
-    print(f"\nEnsemble ({args.ensemble}) paired test RMSE {test_rmse:.4f}")
+    print(f"Ensemble ({args.ensemble}) raw paired test RMSE {test_rmse:.4f} ({time.time()-started:.0f}s)")
+
+    print("Training z-score-track ensemble ...")
+    ens_z, states_z, val_scores_z = train_ensemble(
+        (tr_z_num, tr_z_gen, tr_z_y), (va_z_num, va_z_gen, va_z_y), te_z_num, te_z_gen,
+        n_genres, device, args.ensemble, seed_offset=100)
+    preds_z_raw = np.clip(te_mu + te_sigma * ens_z, RATING_MIN, RATING_MAX)
+    test_rmse_z = rmse(preds_z_raw, te_y)
+    print(f"Ensemble ({args.ensemble}) z paired test RMSE {test_rmse_z:.4f} "
+          f"(raw scale after convert-back, {time.time()-started:.0f}s)")
 
     MODELS.mkdir(parents=True, exist_ok=True)
     torch.save({"state_dicts": states, "numeric_cols": NUMERIC_COLS,
@@ -183,19 +218,42 @@ def main() -> None:
         "architecture": {"embedding_dim": EMB_DIM, "width": WIDTH, "depth": DEPTH,
                          "dropout": DROPOUT}}, indent=2))
 
+    torch.save({"state_dicts": states_z, "numeric_cols": NUMERIC_COLS,
+                "genre_col": GENRE_COL, "log_cols": LOG_COLS, "mu_impute": mu_impute_z,
+                "mu": mu_z, "sd": sd_z, "n_genres": n_genres, "emb_dim": EMB_DIM,
+                "width": WIDTH, "depth": DEPTH, "dropout": DROPOUT,
+                "rating_min": RATING_MIN, "rating_max": RATING_MAX},
+               MODELS / "letterboxd_neural_z.pt")
+    (MODELS / "letterboxd_neural_z_meta.json").write_text(json.dumps({
+        "model_file": "letterboxd_neural_z.pt", "feature_columns": F.FEATURE_COLS,
+        "ensemble_size": args.ensemble, "test_rmse": float(test_rmse_z),
+        "mean_member_val_rmse": float(np.mean(val_scores_z)),
+        "rating_scale": [RATING_MIN, RATING_MAX],
+        "architecture": {"embedding_dim": EMB_DIM, "width": WIDTH, "depth": DEPTH,
+                         "dropout": DROPOUT},
+        "note": "target is (raw - mu_user)/sigma_user; mu_user/sigma_user come "
+                "from the user's own seen-set ratings, not a member's all-time "
+                "stats. test_rmse above is already converted back to the raw scale.",
+    }, indent=2))
+
     out = te_meta.copy()
     out["y"] = te_y
     out["pred_nn"] = ens.astype(np.float32)
+    out["pred_nn_z"] = preds_z_raw.astype(np.float32)
     out.to_parquet(RESULTS / "neural_test_predictions.parquet", index=False)
     (RESULTS / "neural_results.json").write_text(json.dumps({
         "model": "residual_mlp", "rating_scale": [RATING_MIN, RATING_MAX],
         "ensemble_size": args.ensemble, "test_rows": int(len(te_y)),
-        "rmse": float(test_rmse),
+        "rmse": float(test_rmse), "rmse_z": float(test_rmse_z),
         "mean_member_val_rmse": float(np.mean(val_scores))}, indent=2))
     per_n = (out.assign(se=lambda d: (d["pred_nn"] - d["y"]) ** 2)
              .groupby("n")["se"].mean().pipe(np.sqrt))
-    print("Neural net test RMSE by seen-count:")
+    per_n_z = (out.assign(se=lambda d: (d["pred_nn_z"] - d["y"]) ** 2)
+               .groupby("n")["se"].mean().pipe(np.sqrt))
+    print("Neural net test RMSE by seen-count (raw track):")
     print(per_n.round(4).to_string())
+    print("Neural net test RMSE by seen-count (z track, converted back):")
+    print(per_n_z.round(4).to_string())
     print(f"Done in {time.time()-started:.0f}s")
 
 

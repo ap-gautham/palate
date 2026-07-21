@@ -43,8 +43,10 @@
     "genre_id",
     "user_mean"
   ],
-  "train_rows": 14135,
-  "test_rows": 16290,
-  "rmse": 1.583461880683899,
-  "best_iteration": 120
+  "train_rows": 13936,
+  "test_rows": 16045,
+  "rmse": 1.5853581428527832,
+  "rmse_z": 1.6797853762377446,
+  "best_iteration": 148,
+  "best_iteration_z": 138
 }

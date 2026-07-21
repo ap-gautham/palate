@@ -13,6 +13,10 @@ export interface Critic {
   publicationName: string;
   scoreCount: number;
   scoreSum: number;
+  /** All-time sample std of this critic's scores, or null if undefined
+   * (a single review, or a perfectly constant critic) -- the z-score track
+   * skips peer contributions with no sigma. */
+  scoreSigma: number | null;
 }
 
 export interface MovieRows {
@@ -74,10 +78,17 @@ export interface CriticMatch {
   overlap: number;
   sim: number;
   magSim: number;
+  /** Magnitude multiplier in z-space (peer standardized by all-time sigma).
+   * Undefined when the critic's sigma is unavailable (see Critic.scoreSigma). */
+  magSimZ?: number;
 }
 
 export interface Models {
   xgb: XgbModel;
   nn: NNModel;
   kShrink: number;
+  /** z-score-track models: same architecture, trained on (raw - mu_user) /
+   * sigma_user targets; predictions are converted back with zscore.ts. */
+  xgbZ?: XgbModel;
+  nnZ?: NNModel;
 }

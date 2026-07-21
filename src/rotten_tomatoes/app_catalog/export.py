@@ -1,4 +1,5 @@
-"""Export model-compatible assets for the Streamlit catalog and predictions."""
+"""Export model-compatible catalog assets consumed by web_export.export ->
+the browser app."""
 import json
 
 import numpy as np
@@ -52,7 +53,11 @@ def main() -> None:
                    .agg(lambda values: values.mode().iat[0] if len(values.mode()) else ""))
     critic_count = scores.groupby("critic_id")["score_std"].size().rename("score_count")
     critic_sum = scores.groupby("critic_id")["score_std"].sum().rename("score_sum")
-    critics = pd.concat([publication, critic_count, critic_sum], axis=1).reset_index()
+    # All-time sample std (ddof=1, matching the stored "z" column's convention)
+    # for the browser's z-score track; peer standardization uses these, never
+    # the fake-user/visitor's own stats (see pseudo_users.py's build_split docstring).
+    critic_std = scores.groupby("critic_id")["score_std"].std().rename("score_std_dev")
+    critics = pd.concat([publication, critic_count, critic_sum, critic_std], axis=1).reset_index()
     critics["n_reviews"] = critics["score_count"]
     critics.to_parquet(DATA_PROCESSED / "demo_critics.parquet", index=False)
 

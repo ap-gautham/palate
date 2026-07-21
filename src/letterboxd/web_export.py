@@ -1,6 +1,6 @@
 """Export the Letterboxd catalog and both trained models into compact static
 files consumable by the browser (web/public/data/letterboxd/), so the
-Streamlit app's exact predictions can be reproduced client-side with no
+website's exact predictions can be reproduced client-side with no
 Python server. Mirrors rotten_tomatoes.web_export.export; self-contained and
 isolated from Rotten Tomatoes.
 
@@ -55,13 +55,19 @@ def export_catalog():
 
     member_ids = pd.Index(sub["user_id"].drop_duplicates())
     # ALL-TIME stats (not restricted to the 1,000-film catalog) so the app's
-    # leave-one-out peer mean matches the offline training convention.
+    # leave-one-out peer mean -- and the z-score track's peer standardization --
+    # matches the offline training convention. Never the visitor's own stats;
+    # see pseudo_users.py's build_split docstring for why that distinction matters.
     all_time = ratings[ratings["user_id"].isin(member_ids)].groupby("user_id")["rating"].agg(
-        ["sum", "size"]).rename(columns={"sum": "rating_sum", "size": "rating_count"})
+        ["sum", "size", "std"]).rename(
+        columns={"sum": "rating_sum", "size": "rating_count", "std": "rating_sigma"})
     member_index = {mid: i for i, mid in enumerate(member_ids)}
 
     def clean(v):
         return None if pd.isna(v) else (int(v) if float(v).is_integer() else float(v))
+
+    def clean_sigma(v):
+        return None if pd.isna(v) or v <= 1e-9 else float(v)
 
     movies_json = [{
         "id": row.movie_id, "title": row.title if isinstance(row.title, str) and row.title
@@ -72,6 +78,7 @@ def export_catalog():
     members_json = [{
         "id": mid, "ratingSum": float(all_time.loc[mid, "rating_sum"]),
         "ratingCount": int(all_time.loc[mid, "rating_count"]),
+        "ratingSigma": clean_sigma(all_time.loc[mid, "rating_sigma"]),
     } for mid in member_ids]
 
     (OUT / "movies.json").write_text(dumps(movies_json))
@@ -93,9 +100,10 @@ def export_catalog():
           f"{len(score)} ratings, k_shrink={F.K_SHRINK}")
 
 
-def export_xgboost():
-    dump = json.loads((MODELS / "letterboxd_xgboost.json").read_text())
-    meta = json.loads((MODELS / "letterboxd_xgboost_meta.json").read_text())
+def export_xgboost(model_name="letterboxd_xgboost.json", meta_name="letterboxd_xgboost_meta.json",
+                   out_name="xgb_model.json"):
+    dump = json.loads((MODELS / model_name).read_text())
+    meta = json.loads((MODELS / meta_name).read_text())
     learner = dump["learner"]
     base_score = float(json.loads(learner["learner_model_param"]["base_score"])[0])
     trees = learner["gradient_booster"]["model"]["trees"]
@@ -113,8 +121,8 @@ def export_xgboost():
         "unknownGenreId": meta["unknown_genre_id"],
         "trees": compact_trees,
     }
-    (OUT / "xgb_model.json").write_text(dumps(out))
-    print(f"xgboost: {len(compact_trees)} trees, base_score={base_score:.4f}")
+    (OUT / out_name).write_text(dumps(out))
+    print(f"xgboost ({out_name}): {len(compact_trees)} trees, base_score={base_score:.4f}")
 
 
 # Identical layer order convention to rotten_tomatoes.web_export.export --
@@ -134,8 +142,9 @@ LAYER_ORDER = (
 )
 
 
-def export_neural_net():
-    ckpt = torch.load(MODELS / "letterboxd_neural.pt", map_location="cpu", weights_only=False)
+def export_neural_net(model_name="letterboxd_neural.pt", weights_prefix="nn_weights_member",
+                      meta_name="nn_meta.json"):
+    ckpt = torch.load(MODELS / model_name, map_location="cpu", weights_only=False)
     layers = []
     offset = 0
     shapes = {k: tuple(v.shape) for k, v in ckpt["state_dicts"][0].items()
@@ -152,7 +161,7 @@ def export_neural_net():
             for layer in layers
         ])
         assert len(buf) == offset
-        buf.tofile(OUT / f"nn_weights_member{m}.bin")
+        buf.tofile(OUT / f"{weights_prefix}{m}.bin")
 
     meta = {
         "numericCols": ckpt["numeric_cols"],
@@ -171,8 +180,8 @@ def export_neural_net():
         "ratingMin": ckpt.get("rating_min", RATING_MIN),
         "ratingMax": ckpt.get("rating_max", RATING_MAX),
     }
-    (OUT / "nn_meta.json").write_text(dumps(meta))
-    print(f"neural net: {len(ckpt['state_dicts'])} members x {offset} params, "
+    (OUT / meta_name).write_text(dumps(meta))
+    print(f"neural net ({meta_name}): {len(ckpt['state_dicts'])} members x {offset} params, "
           f"{len(layers)} layer blocks")
 
 
@@ -181,6 +190,10 @@ def main():
     export_catalog()
     export_xgboost()
     export_neural_net()
+    if (MODELS / "letterboxd_xgboost_z.json").exists():
+        export_xgboost("letterboxd_xgboost_z.json", "letterboxd_xgboost_z_meta.json", "xgb_z_model.json")
+    if (MODELS / "letterboxd_neural_z.pt").exists():
+        export_neural_net("letterboxd_neural_z.pt", "nn_z_weights_member", "nn_z_meta.json")
     total = sum(f.stat().st_size for f in OUT.iterdir())
     print(f"\ntotal web/public/data/letterboxd size: {total / 1e6:.1f} MB")
 

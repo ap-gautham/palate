@@ -20,7 +20,7 @@ shared Design 1 formula.
 | Design 2 | 38-feature XGBoost (incl. Tomatometer) | 37-feature XGBoost (same contract, no Tomatometer) |
 | Design 3 | trained residual neural ensemble | trained residual neural ensemble (same architecture) |
 | Evaluation | paired/nested seen-history sweep | paired/nested seen-history sweep (same protocol) |
-| App catalog | 1,000 popular films, live in browser + Streamlit | 1,000 popular films, live in browser + Streamlit |
+| App catalog | 1,000 popular films, live in browser | 1,000 popular films, live in browser |
 
 ## Reproduction
 
@@ -49,17 +49,17 @@ std per decile (30 columns) — plus a 7-column tail: `n_observed`,
 `user_mean`. `features.py` provides both a sparse-matrix path (`build_data`,
 `similarity`, `episode_feature_row`, `generate_rows`/`generate_paired_rows`)
 used for training and analysis, and a DataFrame app-path (`app_similarity`,
-`app_features`) used by the Streamlit app and mirrored by the browser
-TypeScript port in `web/src/lib/letterboxd/`.
+`app_features`) used by the browser TypeScript port in
+`web/src/lib/letterboxd/`.
 
 ## Design 3: inductive, not transductive
 
 Design 3 is a residual tabular MLP (`network.py`, identical architecture to
 RT's `design3_neural/network.py`) trained on the same 37 engineered features —
-**inductive**, so it scores a brand-new member's live ratings in the browser
-or Streamlit, unlike a member/movie embedding model (which can only predict
-for members it saw during training). It is genuinely trained (`train_neural.py`,
-a 3-model ensemble), not a placeholder.
+**inductive**, so it scores a brand-new member's live ratings in the browser,
+unlike a member/movie embedding model (which can only predict for members it
+saw during training). It is genuinely trained (`train_neural.py`, a 3-model
+ensemble), not a placeholder.
 
 ## Evaluation and leakage rules
 
@@ -94,18 +94,37 @@ The two are **comparable**, with RT marginally *better* normalized despite its
 sparser critic pseudo-user profiles — an honest result, not a confirmation
 that more (real) rating data produces a lower normalized error here.
 
+## Isolating scale: the z-score track
+
+Each design also has a parallel z-score variant: every member is standardized
+to their own all-time mean/std, the model predicts pure deviation (not level),
+and the prediction is converted back to the raw 1–10 scale before scoring
+(`results/letterboxd/raw_vs_z.csv`, full-history RMSE, both on the raw scale):
+
+| design | raw | z | z − raw |
+|---|---:|---:|---:|
+| Design 1 analytic | 1.507 | 1.640 | +0.134 |
+| Design 2 XGBoost | 1.502 | 1.491 | −0.010 |
+| Design 3 neural net | 1.518 | 1.497 | −0.021 |
+
+Unlike RT (where the z-track trails raw at every design), Letterboxd's trained
+models (Design 2/3) come out **marginally better** in z-space at full history —
+removing each member's own rating level lets the model spend its capacity on
+the deviation signal instead of re-learning it. The analytic formula, which has
+no learned capacity to reallocate, is worse in z-space. See
+`results/letterboxd/figures/plotC_raw_vs_z.png` for the full sweep.
+
 ## Current artifacts
 
 `results/letterboxd/`:
 
-- `nsweep_summary.csv`, `model_summary.csv`, `cross_dataset_comparison.csv`
-- `figures/plotA_rmse_vs_n.png`, `figures/score_distributions.png`
+- `nsweep_summary.csv`, `model_summary.csv`, `cross_dataset_comparison.csv`, `raw_vs_z.csv`
+- `figures/plotA_rmse_vs_n.png`, `figures/plotC_raw_vs_z.png`, `figures/score_distributions.png`
 - `xgboost_results.json`, `neural_results.json` + their `*_test_predictions.parquet`
 - `models/letterboxd_xgboost.json` (+ `_meta.json`), `models/letterboxd_neural.pt` (+ `_meta.json`)
+- `models/letterboxd_xgboost_z.json` (+ `_meta.json`), `models/letterboxd_neural_z.pt` (+ `_meta.json`)
 
-The Streamlit app exposes both projects through its Project selector, with all
-three Letterboxd designs serving live predictions (identical UI to Rotten
-Tomatoes, aside from a 1–10 rating stepper instead of 5 stars and no
-Tomatometer column). The website's dataset switcher runs both projects fully
-interactively, client-side, in the browser (`web/src/lib/letterboxd/`,
-exported by `web_export.py`).
+The website's dataset switcher runs both projects fully interactively,
+client-side, in the browser (`web/src/lib/letterboxd/`, exported by
+`web_export.py`), including both raw and z-score variants of all three
+designs.

@@ -39,12 +39,9 @@ function loadCatalog(): Catalog {
   return { movies, critics, byMovie };
 }
 
-function loadModels(): Models {
-  const xgbRaw = readJson<any>("xgb_model.json");
-  const nnMeta = readJson<NNMeta>("nn_meta.json");
-  const kShrink = readJson<{ kShrink: number }>("k_shrink.json").kShrink;
-
-  const xgb: XgbModel = {
+function loadXgb(name: string): XgbModel {
+  const xgbRaw = readJson<any>(name);
+  return {
     baseScore: xgbRaw.baseScore,
     featureColumns: xgbRaw.featureColumns,
     trees: xgbRaw.trees.map((t: any) => ({
@@ -56,10 +53,30 @@ function loadModels(): Models {
       leafValue: Float64Array.from(t.leafValue),
     })),
   };
+}
+
+function loadNn(metaName: string, weightsPrefix: string): NNModel {
+  const nnMeta = readJson<NNMeta>(metaName);
   const layerOffset = new Map(nnMeta.layers.map((l) => [l.name, l]));
-  const members = Array.from({ length: nnMeta.ensembleSize }, (_, m) => new Float32Array(readBuf(`nn_weights_member${m}.bin`)));
-  const nn: NNModel = { meta: nnMeta, members, layerOffset };
-  return { xgb, nn, kShrink };
+  const members = Array.from({ length: nnMeta.ensembleSize }, (_, m) => new Float32Array(readBuf(`${weightsPrefix}${m}.bin`)));
+  return { meta: nnMeta, members, layerOffset };
+}
+
+function tryLoad<T>(fn: () => T): T | undefined {
+  try {
+    return fn();
+  } catch {
+    return undefined;
+  }
+}
+
+function loadModels(): Models {
+  const kShrink = readJson<{ kShrink: number }>("k_shrink.json").kShrink;
+  const xgb = loadXgb("xgb_model.json");
+  const nn = loadNn("nn_meta.json", "nn_weights_member");
+  const xgbZ = tryLoad(() => loadXgb("xgb_z_model.json"));
+  const nnZ = tryLoad(() => loadNn("nn_z_meta.json", "nn_z_weights_member"));
+  return { xgb, nn, kShrink, xgbZ, nnZ };
 }
 
 const catalog = loadCatalog();
@@ -105,6 +122,7 @@ console.log(JSON.stringify({
     movie_id: catalog.movies[p.movieIdx].id,
     analytic: p.analytic, movie_mean: p.movieMean,
     xgboost: p.xgboost, neural_net: p.neuralNet,
+    analytic_z: p.analyticZ, xgboost_z: p.xgboostZ, neural_net_z: p.neuralNetZ,
   })),
   top_matches: matches.slice(0, 5).map((m) => ({ critic_id: m.criticId, sim: m.sim, mag_sim: m.magSim, overlap: m.overlap })),
 }, null, 2));

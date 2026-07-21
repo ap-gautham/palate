@@ -11,7 +11,7 @@ import pandas as pd
 
 from rotten_tomatoes.config import MOVIES_PARQUET, REVIEWS_PARQUET, SEED, TABLES, VALUE_COL
 from .analytic import predict_movies, shrink
-from .pseudo_users import (build_split, partition_pseudo_users, rmse,
+from rotten_tomatoes.pseudo_users import (build_split, partition_pseudo_users, rmse,
                            sample_random_holdout, similarity, target_ok_mask)
 
 PROFILES_PER_TEST_CRITIC = 8

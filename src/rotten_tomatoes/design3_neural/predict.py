@@ -4,7 +4,7 @@ chosen target films from a user's star ratings. Self-contained.
 import numpy as np
 import pandas as pd
 
-from . import features as F
+from rotten_tomatoes import features as F
 
 
 def load_checkpoint(path):

@@ -16,6 +16,9 @@ export interface Member {
   id: string;
   ratingSum: number;
   ratingCount: number;
+  /** All-time sample std of this member's ratings, or null if undefined --
+   * the z-score track skips peer contributions with no sigma. */
+  ratingSigma: number | null;
 }
 
 export interface MovieRows {
@@ -33,6 +36,9 @@ export interface MemberMatch {
   overlap: number;
   sim: number;
   magSim: number;
+  /** Magnitude multiplier in z-space (peer standardized by all-time sigma).
+   * Undefined when the member's sigma is unavailable. */
+  magSimZ?: number;
 }
 
 export interface Models {
@@ -41,4 +47,8 @@ export interface Models {
   kShrink: number;
   ratingMin: number;
   ratingMax: number;
+  /** z-score-track models: same architecture, trained on (raw - mu_user) /
+   * sigma_user targets; predictions are converted back with zscore.ts. */
+  xgbZ?: XgbModel;
+  nnZ?: NNModel;
 }

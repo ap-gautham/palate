@@ -105,3 +105,69 @@ export function buildFeatureRow(
   row.user_mean = userMean;
   return row;
 }
+
+/** z-space feature row: peers are standardized by their all-time
+ * scoreSum/scoreCount/scoreSigma (critics without a defined sigma are
+ * excluded from the peer pool entirely, mirroring the offline z-Split, which
+ * never includes them). A critic's OWN all-time z-values sum to ~0 by
+ * construction, so their leave-one-out z peer-mean simplifies to
+ * `-z / (scoreCount - 1)` -- no extra export field needed beyond scoreSigma.
+ * The user side (deviations' "similarity" weights and the tail's
+ * `n_observed`/`user_mean`) reflects THIS episode's own seen-set
+ * standardization, done by the caller before calling this (see predict.ts).
+ * Returns null if no peer has a usable sigma (can't build any z feature). */
+export function buildFeatureRowZ(
+  catalog: Catalog,
+  matches: Map<number, CriticMatch>,
+  stats: MatchStats,
+  targetMovieIdx: number,
+  userCount: number
+): Record<string, number> | null {
+  const rows = catalog.byMovie[targetMovieIdx];
+  const critics = catalog.critics;
+  const total = rows.criticIdx.length;
+
+  const sims: number[] = [];
+  const deviations: number[] = [];
+  const zValues: number[] = [];
+  for (let i = 0; i < total; i++) {
+    const cIdx = rows.criticIdx[i];
+    const critic = critics[cIdx];
+    const sigma = critic.scoreSigma;
+    if (sigma == null || sigma <= 1e-9 || critic.scoreCount <= 1) continue;
+    const mu = critic.scoreSum / critic.scoreCount;
+    const z = (rows.score[i] - mu) / sigma;
+    const peerCount = critic.scoreCount - 1;
+    const peerMeanZ = -z / peerCount; // critic's own all-time z-sum is ~0
+    zValues.push(z);
+    deviations.push(z - peerMeanZ);
+    sims.push(matches.get(cIdx)?.sim ?? 0);
+  }
+  const n = zValues.length;
+  if (n === 0) return null;
+
+  let dispersion = 0;
+  if (n > 1) {
+    const mean = zValues.reduce((s, v) => s + v, 0) / n;
+    const sq = zValues.reduce((s, v) => s + (v - mean) ** 2, 0);
+    dispersion = Math.sqrt(sq / (n - 1));
+  }
+
+  const dec = decileFeatures(Float64Array.from(sims), Float64Array.from(deviations));
+  const row: Record<string, number> = {};
+  for (let i = 0; i < DECILES; i++) {
+    row[`d${i}_mean`] = dec[i];
+    row[`d${i}_cnt`] = dec[DECILES + i];
+    row[`d${i}_std`] = dec[2 * DECILES + i];
+  }
+  const movie = catalog.movies[targetMovieIdx];
+  row.n_observed = userCount;
+  row.mean_overlap = stats.meanOverlap;
+  row.max_overlap = stats.maxOverlap;
+  row.tomatometer = movie.tomatometerScore ?? NaN; // external feature, stays raw-scale
+  row.n_reviewers = n;
+  row.dispersion = dispersion;
+  row.genre_id = movie.genreId;
+  row.user_mean = 0; // ~0 by construction -- the level we removed
+  return row;
+}

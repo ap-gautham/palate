@@ -137,6 +137,7 @@ button { font: inherit; }
 .film-table thead th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
 .predictions-table th, .predictions-table td { text-align: right; }
 .predictions-table th:first-child, .predictions-table td:first-child { text-align: left; }
+.z-variant { color: var(--muted); }
 
 .remove-btn {
   border: none; background: none; color: var(--muted); cursor: pointer; font-size: 0.9rem;

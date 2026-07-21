@@ -3,7 +3,7 @@
 > **Historical planning brief.** This document preserves the project's initial
 > design and contains superseded z-score and aggregation proposals. The current
 > implementation, formula definitions, and regenerated results are in
-> [README.md](README.md) and [DOCUMENTATION.md](DOCUMENTATION.md).
+> [README.md](README.md) and [report/report.pdf](report/report.pdf).
 
 **One-line framing (use this, not "movie recommender"):** Estimating a correlation from 3–10 overlapping observations and shrinking it toward a prior by an empirically calibrated factor, then testing whether the resulting personalized prediction beats a flat aggregate on held-out future data.
 

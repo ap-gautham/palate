@@ -1,5 +1,5 @@
 """Export the app catalog and both trained models into compact static files
-consumable by the browser (web/public/data/), so the Streamlit app's exact
+consumable by the browser (web/public/data/), so the website's exact
 predictions can be reproduced client-side with no Python server.
 
 Formats:
@@ -63,9 +63,16 @@ def export_catalog():
         "nScores": int(row.n_scores),
     } for row in movies.itertuples()]
 
+    def clean_sigma(v):
+        # NaN (a single-review critic) or 0 (a perfectly constant critic)
+        # can't be standardized; the browser treats null as "skip the
+        # z-track prediction for this critic", mirroring the offline pipeline.
+        return None if pd.isna(v) or v <= 1e-9 else float(v)
+
     critics_json = [{
         "id": row.critic_id, "publicationName": row.publicationName,
         "scoreCount": int(row.score_count), "scoreSum": float(row.score_sum),
+        "scoreSigma": clean_sigma(row.score_std_dev),
     } for row in critics.itertuples()]
 
     (OUT / "movies.json").write_text(dumps(movies_json))
@@ -87,9 +94,10 @@ def export_catalog():
     return k_shrink
 
 
-def export_xgboost():
-    dump = json.loads((MODELS / "design2_xgboost.json").read_text())
-    meta = json.loads((MODELS / "design2_xgboost_meta.json").read_text())
+def export_xgboost(model_name="design2_xgboost.json", meta_name="design2_xgboost_meta.json",
+                   out_name="xgb_model.json"):
+    dump = json.loads((MODELS / model_name).read_text())
+    meta = json.loads((MODELS / meta_name).read_text())
     learner = dump["learner"]
     base_score = float(json.loads(learner["learner_model_param"]["base_score"])[0])
     trees = learner["gradient_booster"]["model"]["trees"]
@@ -107,8 +115,8 @@ def export_xgboost():
         "unknownGenreId": meta["unknown_genre_id"],
         "trees": compact_trees,
     }
-    (OUT / "xgb_model.json").write_text(dumps(out))
-    print(f"xgboost: {len(compact_trees)} trees, base_score={base_score:.4f}")
+    (OUT / out_name).write_text(dumps(out))
+    print(f"xgboost ({out_name}): {len(compact_trees)} trees, base_score={base_score:.4f}")
 
 
 LAYER_ORDER = (
@@ -126,8 +134,9 @@ LAYER_ORDER = (
 )
 
 
-def export_neural_net():
-    ckpt = torch.load(MODELS / "design3_mlp.pt", map_location="cpu", weights_only=False)
+def export_neural_net(model_name="design3_mlp.pt", weights_prefix="nn_weights_member",
+                      meta_name="nn_meta.json"):
+    ckpt = torch.load(MODELS / model_name, map_location="cpu", weights_only=False)
     layers = []
     offset = 0
     for i in range(6):
@@ -147,7 +156,7 @@ def export_neural_net():
             for layer in layers
         ])
         assert len(buf) == offset
-        buf.tofile(OUT / f"nn_weights_member{m}.bin")
+        buf.tofile(OUT / f"{weights_prefix}{m}.bin")
 
     meta = {
         "numericCols": ckpt["numeric_cols"],
@@ -164,8 +173,8 @@ def export_neural_net():
         "layers": layers,
         "totalParams": offset,
     }
-    (OUT / "nn_meta.json").write_text(dumps(meta))
-    print(f"neural net: {len(ckpt['state_dicts'])} members x {offset} params, "
+    (OUT / meta_name).write_text(dumps(meta))
+    print(f"neural net ({meta_name}): {len(ckpt['state_dicts'])} members x {offset} params, "
           f"{len(layers)} layer blocks")
 
 
@@ -174,6 +183,10 @@ def main():
     export_catalog()
     export_xgboost()
     export_neural_net()
+    if (MODELS / "design2_xgboost_z.json").exists():
+        export_xgboost("design2_xgboost_z.json", "design2_xgboost_z_meta.json", "xgb_z_model.json")
+    if (MODELS / "design3_mlp_z.pt").exists():
+        export_neural_net("design3_mlp_z.pt", "nn_z_weights_member", "nn_z_meta.json")
     total = sum(f.stat().st_size for f in OUT.iterdir())
     print(f"\ntotal web/public/data size: {total / 1e6:.1f} MB")
 

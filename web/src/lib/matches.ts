@@ -1,4 +1,5 @@
 import type { Catalog, CriticMatch } from "./types";
+import type { UserStats } from "./zscore";
 
 const MIN_OVERLAP = 2;
 
@@ -12,11 +13,19 @@ interface Accumulator {
 }
 
 /** Shrunk Pearson alignment + magnitude scale per critic, from the user's
- * seen-film ratings. Mirrors design1_analytic/predict.py:critic_matches. */
+ * seen-film ratings. Mirrors design1_analytic/predict.py:critic_matches.
+ *
+ * Pearson correlation is invariant to each side's own affine (mean/scale)
+ * transform, so `sim` is identical whether computed in raw or z units --
+ * only the magnitude multiplier differs. When `userZStats` is given (the
+ * user's own seen-set mean/std), this also derives `magSimZ` -- the z-space
+ * magnitude against each critic's all-time z (from `scoreSum`/`scoreCount`/
+ * `scoreSigma`) -- from the SAME accumulated sums, without a second pass. */
 export function computeMatches(
   catalog: Catalog,
   userRatings: Map<number, number>,
-  kShrink: number
+  kShrink: number,
+  userZStats?: UserStats
 ): Map<number, CriticMatch> {
   const acc = new Map<number, Accumulator>();
   for (const [movieIdx, userScore] of userRatings) {
@@ -43,12 +52,14 @@ export function computeMatches(
     const n = a.n;
     let pearson = 0;
     let magSim = 1;
+    let eligible = false;
     if (n >= MIN_OVERLAP) {
       const meanU = a.sumUser / n;
       const meanC = a.sumCritic / n;
       const varU = a.sumUser2 / n - meanU * meanU;
       const varC = a.sumCritic2 / n - meanC * meanC;
       if (varU > 1e-9 && varC > 1e-9) {
+        eligible = true;
         const cov = a.sumUserCritic / n - meanU * meanC;
         pearson = cov / Math.sqrt(varU * varC);
         if (a.sumCritic2 > 1e-12) {
@@ -57,7 +68,22 @@ export function computeMatches(
       }
     }
     const sim = pearson * (Math.min(n, kShrink) / kShrink);
-    out.set(cIdx, { overlap: n, sim, magSim });
+    const match: CriticMatch = { overlap: n, sim, magSim };
+
+    if (userZStats && userZStats.sigma > 1e-9 && eligible) {
+      const critic = catalog.critics[cIdx];
+      const criticSigma = critic.scoreSigma;
+      if (criticSigma != null && criticSigma > 1e-9) {
+        const criticMu = critic.scoreSum / critic.scoreCount;
+        const numer = a.sumUserCritic - criticMu * a.sumUser - userZStats.mu * a.sumCritic
+          + n * userZStats.mu * criticMu;
+        const denom = a.sumCritic2 - 2 * criticMu * a.sumCritic + n * criticMu * criticMu;
+        if (denom > 1e-12) {
+          match.magSimZ = (criticSigma * numer) / denom;
+        }
+      }
+    }
+    out.set(cIdx, match);
   }
   return out;
 }

@@ -43,14 +43,9 @@ export async function loadCatalog(): Promise<Catalog> {
   return { movies, critics, byMovie };
 }
 
-export async function loadModels(): Promise<Models> {
-  const [xgbRaw, nnMeta, kStar] = await Promise.all([
-    fetchJson<any>("xgb_model.json"),
-    fetchJson<NNMeta>("nn_meta.json"),
-    fetchJson<{ kShrink: number }>("k_shrink.json").catch(() => ({ kShrink: 8 })),
-  ]);
-
-  const xgb: XgbModel = {
+async function loadXgb(xgbFile: string): Promise<XgbModel> {
+  const xgbRaw = await fetchJson<any>(xgbFile);
+  return {
     baseScore: xgbRaw.baseScore,
     featureColumns: xgbRaw.featureColumns,
     trees: xgbRaw.trees.map((t: any) => ({
@@ -62,14 +57,30 @@ export async function loadModels(): Promise<Models> {
       leafValue: Float64Array.from(t.leafValue),
     })),
   };
+}
 
+async function loadNn(metaFile: string, weightsPrefix: string): Promise<NNModel> {
+  const nnMeta = await fetchJson<NNMeta>(metaFile);
   const layerOffset = new Map(nnMeta.layers.map((l) => [l.name, l]));
   const members = await Promise.all(
     Array.from({ length: nnMeta.ensembleSize }, (_, m) =>
-      fetchBuffer(`nn_weights_member${m}.bin`).then((buf) => new Float32Array(buf))
+      fetchBuffer(`${weightsPrefix}${m}.bin`).then((buf) => new Float32Array(buf))
     )
   );
-  const nn: NNModel = { meta: nnMeta, members, layerOffset };
+  return { meta: nnMeta, members, layerOffset };
+}
 
-  return { xgb, nn, kShrink: kStar.kShrink };
+export async function loadModels(): Promise<Models> {
+  const [xgb, nn, kStar] = await Promise.all([
+    loadXgb("xgb_model.json"),
+    loadNn("nn_meta.json", "nn_weights_member"),
+    fetchJson<{ kShrink: number }>("k_shrink.json").catch(() => ({ kShrink: 8 })),
+  ]);
+
+  const [xgbZ, nnZ] = await Promise.all([
+    loadXgb("xgb_z_model.json").catch(() => undefined),
+    loadNn("nn_z_meta.json", "nn_z_weights_member").catch(() => undefined),
+  ]);
+
+  return { xgb, nn, kShrink: kStar.kShrink, xgbZ, nnZ };
 }

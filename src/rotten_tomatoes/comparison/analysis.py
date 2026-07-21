@@ -199,15 +199,91 @@ def model_summary(rec, d2, d3):
     for tag in ["design1", "tomatometer_z", "critic_mean", "topk_similar_mean"]:
         rows.append({"method": tag, "overall_rmse": rmse(pop[tag] - pop["y"]),
                      "full_history_rmse": rmse(full[tag] - full["y"])})
+    if "design1_z" in pop.columns:
+        valid = pop.dropna(subset=["design1_z"])
+        full_valid = full.dropna(subset=["design1_z"])
+        rows.append({"method": "design1_z", "overall_rmse": rmse(valid["design1_z"] - valid["y"]),
+                     "full_history_rmse": rmse(full_valid["design1_z"] - full_valid["y"])})
     for tag, frame, col in [("design2", d2, "pred_main"), ("design3", d3, "pred_nn")]:
         if frame is None:
             continue
         rows.append({"method": tag, "overall_rmse": rmse(frame[col] - frame["y"]),
                      "full_history_rmse": rmse(
                          frame[frame["n"] == -1][col] - frame[frame["n"] == -1]["y"])})
+        z_col = f"{col}_z"
+        if z_col in frame.columns:
+            rows.append({"method": f"{tag}_z", "overall_rmse": rmse(frame[z_col] - frame["y"]),
+                         "full_history_rmse": rmse(
+                             frame[frame["n"] == -1][z_col] - frame[frame["n"] == -1]["y"])})
     out = pd.DataFrame(rows)
     out.to_csv(TABLES / "model_summary.csv", index=False)
     return out
+
+
+def raw_vs_z_table(summ: pd.DataFrame) -> pd.DataFrame:
+    """Full-history raw RMSE per design x {raw, z}, side by side."""
+    rows = []
+    for design, raw_tag, z_tag in [("design1", "design1", "design1_z"),
+                                    ("design2", "design2", "design2_z"),
+                                    ("design3", "design3", "design3_z")]:
+        raw_row = summ[summ["method"] == raw_tag]
+        z_row = summ[summ["method"] == z_tag]
+        if raw_row.empty:
+            continue
+        rows.append({
+            "design": design,
+            "raw_full_history_rmse": float(raw_row["full_history_rmse"].iloc[0]),
+            "z_full_history_rmse": float(z_row["full_history_rmse"].iloc[0]) if not z_row.empty else np.nan,
+        })
+    out = pd.DataFrame(rows)
+    if len(out):
+        out["z_minus_raw"] = out["z_full_history_rmse"] - out["raw_full_history_rmse"]
+    out.to_csv(TABLES / "raw_vs_z.csv", index=False)
+    return out
+
+
+def plot_c(rec, d2, d3):
+    """Overlay each design's raw track (solid) against its z-score track
+    (dashed, converted back to the raw scale) across seen-history n."""
+    pop = rec[rec["sampling"] == "pop"]
+    has_z = "design1_z" in pop.columns
+    fig, ax = plt.subplots(figsize=(8.5, 5.2), dpi=180)
+    fig.patch.set_facecolor(SURFACE)
+    xs = np.arange(len(N_ORDER))
+    series = [("design1", pop, "design1", "design1_z")]
+    if d2 is not None and "pred_main_z" in d2.columns:
+        series.append(("design2", d2, "pred_main", "pred_main_z"))
+    if d3 is not None and "pred_nn_z" in d3.columns:
+        series.append(("design3", d3, "pred_nn", "pred_nn_z"))
+    plotted_any = False
+    for key, frame, raw_col, z_col in series:
+        raw_mean = []
+        z_mean = []
+        for n in N_ORDER:
+            g = frame[frame["n"] == n]
+            raw_mean.append(per_draw_rmse(g, raw_col).mean())
+            g_valid = g.dropna(subset=[z_col])
+            z_mean.append(rmse(g_valid[z_col] - g_valid["y"]) if len(g_valid) else np.nan)
+        ax.plot(xs, raw_mean, color=C[key], linewidth=2, marker="o", markersize=4.5,
+                label=f"{LABEL[key]} (raw)")
+        ax.plot(xs, z_mean, color=C[key], linewidth=2, linestyle="--", marker="s",
+                markersize=4, alpha=0.75, label=f"{LABEL[key]} (z, converted back)")
+        plotted_any = True
+    if not plotted_any or not has_z:
+        plt.close(fig)
+        return
+    ax.set_xticks(xs, N_TICK)
+    ax.set_xlim(-0.3, len(xs) + 1.1)
+    ax.set_xlabel("n = seen ratings sampled for each fake profile", fontsize=10, color="#0b0b0b")
+    ax.set_ylabel(f"RMSE on random held-out {VALUE_NAME}", fontsize=10, color="#0b0b0b")
+    ax.set_title("Isolating scale: raw track vs. z-score track\n"
+                 "(z-space predictions converted back to the raw scale)",
+                 fontsize=12, color="#0b0b0b", loc="left", pad=12)
+    style_ax(ax)
+    ax.legend(loc="upper right", fontsize=7.5, frameon=False)
+    fig.tight_layout()
+    fig.savefig(FIGURES / "plotC_raw_vs_z.png", facecolor=SURFACE)
+    plt.close(fig)
 
 
 def secondary_metrics(rec):
@@ -241,12 +317,17 @@ def main():
     plot_b(strat_df)
     summ = model_summary(rec, d2, d3)
     sec = secondary_metrics(rec)
+    plot_c(rec, d2, d3)
+    raw_vs_z = raw_vs_z_table(summ)
     print("Model summary (overall / full-history RMSE):")
     print(summ.round(4).to_string(index=False))
     print("\nStratified (full history):")
     print(strat_df[strat_df["n"] == -1].round(4).to_string(index=False))
     print("\nSecondary metrics:")
     print(sec.round(4).to_string(index=False))
+    if len(raw_vs_z):
+        print("\nRaw vs. z-score track (full-history RMSE, both on the raw scale):")
+        print(raw_vs_z.round(4).to_string(index=False))
     print("\nFigures written to", FIGURES)
 
 

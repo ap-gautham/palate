@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 # Design 1 owns the analytic formula; the pseudo-user substrate is identical in
 # every design folder, so testing one copy tests them all.
-from rotten_tomatoes.design1_analytic.pseudo_users import (Split, iter_paired_episodes,
+from rotten_tomatoes.pseudo_users import (Split, iter_paired_episodes,
                                            partition_pseudo_users,
                                            sample_random_holdout, similarity)
 from rotten_tomatoes.design1_analytic.analytic import predict_movies

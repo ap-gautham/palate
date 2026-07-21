@@ -3,7 +3,7 @@ plus the shrinkage and the top-k baseline it is compared against.
 """
 import numpy as np
 
-from .pseudo_users import Split
+from rotten_tomatoes.pseudo_users import Split
 
 
 def shrink(r: np.ndarray, cnt: np.ndarray, k: float) -> np.ndarray:

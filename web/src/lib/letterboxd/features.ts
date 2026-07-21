@@ -99,3 +99,64 @@ export function buildFeatureRow(
   row.user_mean = userMean;
   return row;
 }
+
+/** z-space feature row: peers standardized by their all-time
+ * ratingSum/ratingCount/ratingSigma (members without a defined sigma are
+ * excluded entirely, mirroring the offline z-Split). Mirrors the RT
+ * buildFeatureRowZ leave-one-out simplification: a member's own all-time
+ * z-values sum to ~0, so their peer z-mean is `-z / (ratingCount - 1)`.
+ * Returns null if no peer has a usable sigma. */
+export function buildFeatureRowZ(
+  catalog: Catalog,
+  matches: Map<number, MemberMatch>,
+  stats: MatchStats,
+  targetMovieIdx: number,
+  userCount: number
+): Record<string, number> | null {
+  const rows = catalog.byMovie[targetMovieIdx];
+  const members = catalog.members;
+  const total = rows.memberIdx.length;
+
+  const sims: number[] = [];
+  const deviations: number[] = [];
+  const zValues: number[] = [];
+  for (let i = 0; i < total; i++) {
+    const mIdx = rows.memberIdx[i];
+    const member = members[mIdx];
+    const sigma = member.ratingSigma;
+    if (sigma == null || sigma <= 1e-9 || member.ratingCount <= 1) continue;
+    const mu = member.ratingSum / member.ratingCount;
+    const z = (rows.score[i] - mu) / sigma;
+    const peerCount = member.ratingCount - 1;
+    const peerMeanZ = -z / peerCount; // member's own all-time z-sum is ~0
+    zValues.push(z);
+    deviations.push(z - peerMeanZ);
+    sims.push(matches.get(mIdx)?.sim ?? 0);
+  }
+  const n = zValues.length;
+  if (n === 0) return null;
+
+  let dispersion = 0;
+  if (n > 1) {
+    const mean = zValues.reduce((s, v) => s + v, 0) / n;
+    const sq = zValues.reduce((s, v) => s + (v - mean) ** 2, 0);
+    dispersion = Math.sqrt(sq / (n - 1));
+  }
+
+  const dec = decileFeatures(Float64Array.from(sims), Float64Array.from(deviations));
+  const row: Record<string, number> = {};
+  for (let i = 0; i < DECILES; i++) {
+    row[`d${i}_mean`] = dec[i];
+    row[`d${i}_cnt`] = dec[DECILES + i];
+    row[`d${i}_std`] = dec[2 * DECILES + i];
+  }
+  const movie = catalog.movies[targetMovieIdx];
+  row.n_observed = userCount;
+  row.mean_overlap = stats.meanOverlap;
+  row.max_overlap = stats.maxOverlap;
+  row.n_reviewers = n;
+  row.dispersion = dispersion;
+  row.genre_id = movie.genreId;
+  row.user_mean = 0; // ~0 by construction -- the level we removed
+  return row;
+}

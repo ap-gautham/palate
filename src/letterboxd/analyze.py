@@ -65,8 +65,8 @@ def style_ax(ax):
 
 
 # ---- model loaders ---------------------------------------------------------
-def load_xgb():
-    path = MODELS / "letterboxd_xgboost.json"
+def load_xgb(name="letterboxd_xgboost.json"):
+    path = MODELS / name
     if not path.exists():
         return None
     booster = xgb.Booster()
@@ -74,8 +74,8 @@ def load_xgb():
     return booster
 
 
-def load_nn():
-    path = MODELS / "letterboxd_neural.pt"
+def load_nn(name="letterboxd_neural.pt"):
+    path = MODELS / name
     if not path.exists():
         return None
     import torch
@@ -83,7 +83,9 @@ def load_nn():
     return torch.load(path, map_location="cpu", weights_only=False)
 
 
-def nn_predict(ckpt, feats: pd.DataFrame) -> np.ndarray:
+def nn_predict_raw(ckpt, feats: pd.DataFrame) -> np.ndarray:
+    """Ensemble-averaged prediction, UNCLIPPED -- valid on the raw [1,10]
+    scale or on unbounded z-space, depending on which checkpoint is passed."""
     import torch
     from .network import TabularResNet
     numeric = feats[ckpt["numeric_cols"]].to_numpy(np.float32).copy()
@@ -103,15 +105,24 @@ def nn_predict(ckpt, feats: pd.DataFrame) -> np.ndarray:
         model.eval()
         with torch.no_grad():
             preds += model(num_t, gen_t).numpy()
-    return np.clip(preds / len(ckpt["state_dicts"]), RATING_MIN, RATING_MAX)
+    return preds / len(ckpt["state_dicts"])
+
+
+def nn_predict(ckpt, feats: pd.DataFrame) -> np.ndarray:
+    return np.clip(nn_predict_raw(ckpt, feats), RATING_MIN, RATING_MAX)
 
 
 # ---- evaluation ------------------------------------------------------------
 def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt,
-             targets_per_user=8, draws=3, n_max_finite=50):
+             targets_per_user=8, draws=3, n_max_finite=50,
+             data_z: F.LBData | None = None, xgb_model_z=None, nn_ckpt_z=None):
     """One pass over paired episodes; returns a records DataFrame with per-method
-    predictions and the collected feature rows for the learned models."""
+    predictions and the collected feature rows for the learned models. If
+    ``data_z`` is given, also computes the z-score track (converted back to
+    the raw scale) for Design 1/2/3, dropping only the z columns (to NaN) for
+    episodes whose seen ratings have ~zero variance."""
     records, feature_rows = [], []
+    z_feature_rows, z_mus, z_sigmas, z_valid = [], [], [], []
     for (member, target_col, y, n, draw, seen_cols, seen_vals) in F.iter_paired_episodes(
             data, test_members, N_GRID, targets_per_user, draws, n_max_finite):
         sim, mag, overlap = F.similarity(data, seen_cols, seen_vals, member)
@@ -137,9 +148,43 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt,
                 "genre_id": int(data.genre_id[target_col]),
                 "user_mean": float(np.mean(seen_vals))}
         feature_rows.append(F.main_feature_row(r_sim, F.target_deviations(data, raters, values), tail))
-        records.append({"member": member, "n": n, "draw": draw, "y": y,
-                        "zero": b1, "critic_mean": consensus, "topk_similar_mean": b4,
-                        "design1": analytic})
+
+        row = {"member": member, "n": n, "draw": draw, "y": y,
+               "zero": b1, "critic_mean": consensus, "topk_similar_mean": b4,
+               "design1": analytic}
+
+        if data_z is not None:
+            mu = float(np.mean(seen_vals))
+            sigma = float(np.std(seen_vals, ddof=0))
+            if sigma > 1e-9:
+                seen_z = (seen_vals - mu) / sigma
+                sim_z, mag_z, _ = F.similarity(data_z, seen_cols, seen_z, member)
+                raters_z, values_z = F.target_raters(data_z, target_col, member)
+                if len(raters_z) >= F.MIN_OTHER_REVIEWERS:
+                    rz_sim, rz_mag = sim_z[raters_z], mag_z[raters_z]
+                    consensus_z = float(values_z.mean())
+                    weight_z = np.abs(rz_sim)
+                    num_z = ((weight_z * consensus_z + rz_sim * (values_z - consensus_z)) * rz_mag).sum()
+                    analytic_z = consensus_z if weight_z.sum() == 0 else float(num_z / weight_z.sum())
+                    row["design1_z"] = float(np.clip(mu + sigma * analytic_z, RATING_MIN, RATING_MAX))
+
+                    z_result = F.episode_feature_row_z(data, data_z, seen_cols, seen_vals, target_col, member)
+                    if z_result is not None:
+                        z_row, zmu, zsigma = z_result
+                        z_feature_rows.append(z_row)
+                        z_mus.append(zmu)
+                        z_sigmas.append(zsigma)
+                        z_valid.append(True)
+                    else:
+                        z_valid.append(False)
+                else:
+                    z_valid.append(False)
+            else:
+                z_valid.append(False)
+            if not z_valid[-1]:
+                row["design1_z"] = np.nan
+
+        records.append(row)
     rec = pd.DataFrame(records)
     feats = pd.DataFrame(feature_rows, columns=F.FEATURE_COLS)
     feats["genre_id"] = feats["genre_id"].astype(int)
@@ -148,10 +193,29 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt,
                                  RATING_MIN, RATING_MAX)
     if nn_ckpt is not None:
         rec["design3"] = nn_predict(nn_ckpt, feats)
+
+    if data_z is not None:
+        z_valid = np.asarray(z_valid, dtype=bool)
+        rec["design2_z"] = np.nan
+        rec["design3_z"] = np.nan
+        if z_feature_rows:
+            z_feats = pd.DataFrame(z_feature_rows, columns=F.FEATURE_COLS)
+            z_feats["genre_id"] = z_feats["genre_id"].astype(int)
+            z_mus_arr, z_sigmas_arr = np.asarray(z_mus), np.asarray(z_sigmas)
+            valid_idx = rec.index[z_valid]
+            if xgb_model_z is not None:
+                pred_z = xgb_model_z.predict(xgb.DMatrix(z_feats[F.FEATURE_COLS]))
+                rec.loc[valid_idx, "design2_z"] = np.clip(
+                    z_mus_arr + z_sigmas_arr * pred_z, RATING_MIN, RATING_MAX)
+            if nn_ckpt_z is not None:
+                pred_z = nn_predict_raw(nn_ckpt_z, z_feats)
+                rec.loc[valid_idx, "design3_z"] = np.clip(
+                    z_mus_arr + z_sigmas_arr * pred_z, RATING_MIN, RATING_MAX)
     return rec
 
 
 def per_draw_rmse(g, col):
+    g = g.dropna(subset=[col, "y"])
     return g.groupby("draw").apply(lambda d: rmse(d[col] - d["y"]), include_groups=False)
 
 
@@ -186,7 +250,7 @@ def plot_a(rec, methods):
                 marker="" if flat else "o", markersize=4.5, label=LABEL[m])
         if not flat:
             ax.fill_between(xs, mean - sd, mean + sd, color=C[m], alpha=0.15, linewidth=0)
-    ax.set_ylim(top=max(c[0].max() for c in curves.values()) * 1.09)
+    ax.set_ylim(top=max(np.nanmax(c[0]) for c in curves.values()) * 1.09)
     ax.set_xticks(xs, N_TICK)
     ax.set_xlim(-0.3, len(xs) - 0.4)
     ax.set_xlabel("n = seen ratings sampled for each member profile", fontsize=10, color="#0b0b0b")
@@ -198,6 +262,42 @@ def plot_a(rec, methods):
     fig.tight_layout()
     FIGURES.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIGURES / "plotA_rmse_vs_n.png", facecolor=SURFACE)
+    plt.close(fig)
+
+
+def plot_c(rec, methods):
+    """Overlay each design's raw track (solid) against its z-score track
+    (dashed, converted back to the raw scale) across seen-history n."""
+    z_pairs = [("design1", "design1_z"), ("design2", "design2_z"), ("design3", "design3_z")]
+    z_pairs = [(raw, z) for raw, z in z_pairs if raw in methods and z in rec.columns
+              and rec[z].notna().any()]
+    if not z_pairs:
+        return
+    fig, ax = plt.subplots(figsize=(8.5, 5.2), dpi=180)
+    fig.patch.set_facecolor(SURFACE)
+    xs = np.arange(len(N_ORDER))
+    for raw_key, z_key in z_pairs:
+        raw_mean, z_mean = [], []
+        for n in N_ORDER:
+            sub = rec[rec["n"] == n]
+            raw_mean.append(per_draw_rmse(sub, raw_key).mean())
+            z_mean.append(per_draw_rmse(sub, z_key).mean())
+        ax.plot(xs, raw_mean, color=C[raw_key], linewidth=2, marker="o", markersize=4.5,
+                label=f"{LABEL[raw_key]} (raw)")
+        ax.plot(xs, z_mean, color=C[raw_key], linewidth=2, linestyle="--", marker="s",
+                markersize=4, alpha=0.75, label=f"{LABEL[raw_key]} (z, converted back)")
+    ax.set_xticks(xs, N_TICK)
+    ax.set_xlim(-0.3, len(xs) - 0.4)
+    ax.set_xlabel("n = seen ratings sampled for each member profile", fontsize=10, color="#0b0b0b")
+    ax.set_ylabel("RMSE on random held-out rating (1–10)", fontsize=10, color="#0b0b0b")
+    ax.set_title("Letterboxd: raw track vs. z-score track\n"
+                 "(z-space predictions converted back to the raw scale)",
+                 fontsize=12, color="#0b0b0b", loc="left", pad=12)
+    style_ax(ax)
+    ax.legend(loc="upper right", fontsize=7.5, frameon=False)
+    fig.tight_layout()
+    FIGURES.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES / "plotC_raw_vs_z.png", facecolor=SURFACE)
     plt.close(fig)
 
 
@@ -239,18 +339,42 @@ def cross_dataset(lb_full: dict):
     return pd.DataFrame(rows)
 
 
+def raw_vs_z_table(summ: pd.DataFrame) -> pd.DataFrame:
+    """Full-history raw-scale RMSE per design x {raw, z}, side by side."""
+    rows = []
+    for design in ["design1", "design2", "design3"]:
+        raw_row = summ[summ["method"] == design]
+        z_row = summ[summ["method"] == f"{design}_z"]
+        if raw_row.empty:
+            continue
+        rows.append({
+            "design": design,
+            "raw_full_history_rmse": float(raw_row["full_history_rmse"].iloc[0]),
+            "z_full_history_rmse": float(z_row["full_history_rmse"].iloc[0]) if not z_row.empty else np.nan,
+        })
+    out = pd.DataFrame(rows)
+    if len(out):
+        out["z_minus_raw"] = out["z_full_history_rmse"] - out["raw_full_history_rmse"]
+    out.to_csv(RESULTS / "raw_vs_z.csv", index=False)
+    return out
+
+
 def main():
     started = time.time()
     ratings = pd.read_parquet(RATINGS_PARQUET)
     movies = pd.read_parquet(MOVIES_PARQUET)
     data = F.build_data(ratings, movies)
+    data_z = F.build_data(ratings, movies, value="z")
     parts = F.partition_members(data)
     test_members = parts["test"][:300]
     print(f"built matrix {data.n_members}x{data.n_movies}; {len(test_members)} test members "
           f"({time.time()-started:.0f}s)")
 
     xgb_model, nn_ckpt = load_xgb(), load_nn()
-    rec = evaluate(data, test_members, xgb_model, nn_ckpt)
+    xgb_model_z = load_xgb("letterboxd_xgboost_z.json")
+    nn_ckpt_z = load_nn("letterboxd_neural_z.pt")
+    rec = evaluate(data, test_members, xgb_model, nn_ckpt, data_z=data_z,
+                   xgb_model_z=xgb_model_z, nn_ckpt_z=nn_ckpt_z)
     print(f"evaluated {len(rec):,} episodes ({time.time()-started:.0f}s)")
 
     methods = ["zero", "critic_mean", "topk_similar_mean", "design1"]
@@ -258,25 +382,35 @@ def main():
         methods.append("design2")
     if nn_ckpt is not None:
         methods.append("design3")
+    z_methods = [f"{m}_z" for m in ["design1", "design2", "design3"] if f"{m}_z" in rec.columns]
 
-    sweep = sweep_table(rec, methods)
+    sweep = sweep_table(rec, methods + z_methods)
     RESULTS.mkdir(parents=True, exist_ok=True)
     sweep.to_csv(RESULTS / "nsweep_summary.csv")
     print("\nLetterboxd RMSE by seen-count:\n", sweep.round(4).to_string())
 
     full = {m: float(sweep.loc[m, "all"]) for m in methods}
-    overall = {m: rmse(rec[m] - rec["y"]) for m in methods}
-    pd.DataFrame({"method": methods,
-                  "overall_rmse": [overall[m] for m in methods],
-                  "full_history_rmse": [full[m] for m in methods]}
-                 ).to_csv(RESULTS / "model_summary.csv", index=False)
+    overall = {m: rmse(rec.dropna(subset=[m, "y"])[m] - rec.dropna(subset=[m, "y"])["y"])
+              for m in methods}
+    rows = [{"method": m, "overall_rmse": overall[m], "full_history_rmse": full[m]} for m in methods]
+    for zm in z_methods:
+        valid = rec.dropna(subset=[zm, "y"])
+        rows.append({"method": zm, "overall_rmse": rmse(valid[zm] - valid["y"]),
+                     "full_history_rmse": float(sweep.loc[zm, "all"])})
+    summ = pd.DataFrame(rows)
+    summ.to_csv(RESULTS / "model_summary.csv", index=False)
 
     plot_a(rec, methods)
+    plot_c(rec, methods)
     plot_score_distributions(data, ratings)
     cross = cross_dataset(full)
     cross.to_csv(RESULTS / "cross_dataset_comparison.csv", index=False)
+    raw_vs_z = raw_vs_z_table(summ)
     print("\nCross-dataset (normalized RMSE = RMSE / rating-range):")
     print(cross.round(4).to_string(index=False))
+    if len(raw_vs_z):
+        print("\nRaw vs. z-score track (full-history RMSE, both on the raw scale):")
+        print(raw_vs_z.round(4).to_string(index=False))
     print(f"\nDone in {time.time()-started:.0f}s. Figures in {FIGURES}")
 
 
