@@ -102,6 +102,14 @@ def export_catalog():
     (OUT / "movies.json").write_text(dumps(movies_json))
     (OUT / "critics.json").write_text(dumps(critics_json))
 
+    # "Movies like this one" suggestions for the app's predict-row dropdown
+    # (K-means on content facets; see movie_features.top_similar). Consensus
+    # signal is the mapped Tomatometer score, already in movies_json.
+    consensus = {m["id"]: m["tomatometerScore"] for m in movies_json
+                if m["tomatometerScore"] is not None}
+    similar = MF.top_similar(movies_json, consensus)
+    (OUT / "similar.json").write_text(dumps(similar))
+
     critic_idx = scores["critic_id"].map(critic_index).to_numpy(dtype=np.uint16)
     movie_idx = scores["movie_id"].map(movie_index).to_numpy(dtype=np.uint16)
     score = scores["score_std"].to_numpy(dtype=np.float32)

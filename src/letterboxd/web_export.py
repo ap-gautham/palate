@@ -104,6 +104,14 @@ def export_catalog():
     (OUT / "movies.json").write_text(dumps(movies_json))
     (OUT / "members.json").write_text(dumps(members_json))
 
+    # "Movies like this one" suggestions for the app's predict-row dropdown
+    # (K-means on content facets; see movie_features.top_similar). Consensus
+    # signal is the mean member rating within the catalog (LB has no
+    # Tomatometer-style external score).
+    mean_rating = sub.groupby("movie_id")["rating"].mean().to_dict()
+    similar = MF.top_similar(movies_json, mean_rating)
+    (OUT / "similar.json").write_text(dumps(similar))
+
     member_idx = sub["user_id"].map(member_index).to_numpy(dtype=np.uint16)
     movie_idx = sub["movie_id"].map(movie_index).to_numpy(dtype=np.uint16)
     score = sub["rating"].to_numpy(dtype=np.float32)

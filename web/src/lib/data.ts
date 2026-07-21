@@ -15,12 +15,13 @@ async function fetchBuffer(path: string): Promise<ArrayBuffer> {
 }
 
 export async function loadCatalog(): Promise<Catalog> {
-  const [movies, critics, criticIdxBuf, movieIdxBuf, scoreBuf] = await Promise.all([
+  const [movies, critics, criticIdxBuf, movieIdxBuf, scoreBuf, similar] = await Promise.all([
     fetchJson<Movie[]>("movies.json"),
     fetchJson<Critic[]>("critics.json"),
     fetchBuffer("ratings_critic_idx.bin"),
     fetchBuffer("ratings_movie_idx.bin"),
     fetchBuffer("ratings_score.bin"),
+    fetchJson<number[][]>("similar.json").catch(() => []),
   ]);
   const criticIdx = new Uint16Array(criticIdxBuf);
   const movieIdx = new Uint16Array(movieIdxBuf);
@@ -39,8 +40,9 @@ export async function loadCatalog(): Promise<Catalog> {
     byMovie[m].criticIdx[c] = criticIdx[i];
     byMovie[m].score[c] = score[i];
   }
+  const similarByMovie = movies.map((_, i) => similar[i] ?? []);
 
-  return { movies, critics, byMovie };
+  return { movies, critics, byMovie, similar: similarByMovie };
 }
 
 async function loadXgb(xgbFile: string): Promise<XgbModel> {

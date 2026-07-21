@@ -56,6 +56,7 @@ export function LetterboxdApp({ data }: { data: LetterboxdData }) {
   const chosen = useMemo(() => new Set([...seenIdxs, ...predictIdxs]), [seenIdxs, predictIdxs]);
 
   function addSeen(idx: number) {
+    if (chosen.has(idx)) return;
     setSeenIdxs((prev) => [...prev, idx]);
     setSeenRatings((prev) => ({ ...prev, [idx]: DEFAULT_RATING }));
   }
@@ -171,6 +172,9 @@ export function LetterboxdApp({ data }: { data: LetterboxdData }) {
           emptyText="No films added yet."
           scoreMax={10}
           renderRating={(value, onChange) => <RatingInput value={value} onChange={onChange} />}
+          suggestions={(idx) => catalog.similar[idx] ?? []}
+          onAddSuggestion={addSeen}
+          seenSet={new Set(seenIdxs)}
         />
       </section>
 

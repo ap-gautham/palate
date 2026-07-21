@@ -54,6 +54,10 @@ export interface Catalog {
   movies: Movie[];
   critics: Critic[];
   byMovie: MovieRows[];
+  /** "Movies like this one" -- 10 nearest-neighbour catalog positions per
+   * movie (K-means on content facets), position-aligned to `movies`. Used by
+   * the predict-row suggestion dropdown. */
+  similar: number[][];
 }
 
 export interface XgbTree {

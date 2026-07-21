@@ -54,6 +54,7 @@ export function PredictApp({ data }: { data: AppData }) {
   const chosen = useMemo(() => new Set([...seenIdxs, ...predictIdxs]), [seenIdxs, predictIdxs]);
 
   function addSeen(idx: number) {
+    if (chosen.has(idx)) return;
     setSeenIdxs((prev) => [...prev, idx]);
     setSeenRatings((prev) => ({ ...prev, [idx]: 3 }));
   }
@@ -164,6 +165,9 @@ export function PredictApp({ data }: { data: AppData }) {
           onRemove={removePredict}
           label={labelOf}
           emptyText="No films added yet."
+          suggestions={(idx) => catalog.similar[idx] ?? []}
+          onAddSuggestion={addSeen}
+          seenSet={new Set(seenIdxs)}
         />
       </section>
 
