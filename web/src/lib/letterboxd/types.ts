@@ -52,7 +52,7 @@ export interface Catalog {
   movies: Movie[];
   members: Member[];
   byMovie: MovieRows[];
-  /** "Movies like this one" -- 10 nearest-neighbour catalog positions per
+  /** "Movies like this one" -- 20 nearest-neighbour catalog positions per
    * movie (K-means on content facets), position-aligned to `movies`. Used by
    * the predict-row suggestion dropdown. */
   similar: number[][];

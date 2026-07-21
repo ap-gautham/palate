@@ -17,7 +17,7 @@ interface Props<M extends { title: string; year: number | null }> {
   /** Denominator shown in the score pill ("4/5" vs "7/10"). Defaults to 5. */
   scoreMax?: number;
   /** When given, each row gets an expandable "movies like this one" dropdown
-   * -- 10 catalog indices most similar to that row's film. Only meaningful on
+   * -- 20 catalog indices most similar to that row's film. Only meaningful on
    * the "films to predict" table. */
   suggestions?: (idx: number) => number[];
   /** Adds a chosen suggestion to "films you have seen" (with a default rating). */

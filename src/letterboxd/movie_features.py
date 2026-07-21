@@ -277,7 +277,7 @@ def _multihot(values: list, vocab: dict, width: int) -> np.ndarray:
     return row
 
 
-def top_similar(movies_json: list[dict], consensus: dict, k_neighbors: int = 10,
+def top_similar(movies_json: list[dict], consensus: dict, k_neighbors: int = 20,
                 seed: int = SEED) -> list[list[int]]:
     """Content-based "movies like this one" neighbours, position-aligned to
     ``movies_json``. Builds one standardized feature vector per film --

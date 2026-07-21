@@ -132,12 +132,38 @@ deviation signal instead of re-learning it. The full-neighbourhood analytic
 formula, which has no learned capacity to reallocate, is worse in z-space. See
 `results/letterboxd/figures/plotC_raw_vs_z.png` for the full sweep.
 
+## "Movies like this one" suggestions
+
+The app's "films to predict" table has an expandable dropdown per row (green
+if you've already rated one of that film's `k_neighbors` nearest content
+neighbours, red otherwise) suggesting similar films to rate. Neighbours are
+precomputed offline with K-means (`movie_features.top_similar`) over a
+standardized vector of genre/decade multi-hot, a catalog-scoped top-k
+multi-hot over studio/director/actor/theme/language/country, and numeric
+runtime/rating/year/consensus (mean member rating here, in place of RT's
+Tomatometer) — identical method to Rotten Tomatoes'.
+
+`k_neighbors` was tuned with a paired-episode sweep (`similar_k_sweep.py`):
+6,000 held-out (member, n=10 seen, target) episodes were bucketed by how many
+of the target's k nearest neighbours were already in the seen set, for
+`k_neighbors` ∈ {10, 20, 30} — the same 6,000 Design-1 predictions are reused
+for every k, so only the bucketing differs. Unlike Rotten Tomatoes' clean
+RMSE decline as similar-seen count rises, Letterboxd's sweep is noisier and
+does not cleanly discriminate among the three values at this sample size
+(the mechanical "lowest RMSE at ≥3 similar seen" rule picks `k=10` at 0.622,
+but that bucket has only 6 episodes — not a result to trust). Reported
+honestly: `k_neighbors=20` was set for *both* projects, since Rotten
+Tomatoes' larger, more reliable sample supports it outright and Letterboxd's
+own data doesn't contradict it strongly enough to justify a different value.
+Full numbers: `results/letterboxd/similar_k_sweep.csv`,
+`figures/plotD_similar_k_sweep.png`.
+
 ## Current artifacts
 
 `results/letterboxd/`:
 
-- `nsweep_summary.csv`, `model_summary.csv`, `cross_dataset_comparison.csv`, `raw_vs_z.csv`
-- `figures/plotA_rmse_vs_n.png`, `figures/plotC_raw_vs_z.png`, `figures/score_distributions.png`
+- `nsweep_summary.csv`, `model_summary.csv`, `cross_dataset_comparison.csv`, `raw_vs_z.csv`, `similar_k_sweep.csv`
+- `figures/plotA_rmse_vs_n.png`, `figures/plotC_raw_vs_z.png`, `figures/plotD_similar_k_sweep.png`, `figures/score_distributions.png`
 - `xgboost_results.json`, `neural_results.json` + their `*_test_predictions.parquet`
 - `models/letterboxd_xgboost.json` (+ `_meta.json`), `models/letterboxd_neural.pt` (+ `_meta.json`)
 - `models/letterboxd_xgboost_z.json` (+ `_meta.json`), `models/letterboxd_neural_z.pt` (+ `_meta.json`)

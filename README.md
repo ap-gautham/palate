@@ -115,6 +115,25 @@ every method's raw and z-score prediction side by side with the consensus
 mean, plus (rating any predict film) the mean squared error of each variant
 against your own score, with the closest marked.
 
+**"Movies like this one" suggestions.** Each row in "films to predict" has an
+expandable dropdown — green if you've already rated one of that film's 20
+nearest content neighbours, red otherwise — listing 20 similar films
+(K-means over genre/decade/theme/studio/director/actor/runtime/rating/year,
+`movie_features.top_similar`) with a tip to rate them to improve that
+prediction. The neighbour-list length (`k_neighbors`) was itself tuned: a
+paired-episode sweep (`rotten_tomatoes.design1_analytic.similar_k_sweep`,
+`letterboxd.similar_k_sweep`) bucketed 6,000 held-out predictions by how many
+of the target's k nearest neighbours were already in the rater's seen set,
+for `k_neighbors` ∈ {10, 20, 30}. Rotten Tomatoes showed a clean RMSE decline
+as similar-seen count rose, with `k=20` clearly best (RMSE 1.121 at ≥3
+similar films seen, n=43, vs. `k=30`'s 1.525/n=99 and `k=10`'s
+barely-sampled 3.966/n=7). Letterboxd's own sweep was noisier and did not
+cleanly discriminate among the three values at this sample size — reported
+honestly rather than forced to agree — so `k_neighbors=20` was set for both
+projects on the strength of Rotten Tomatoes' cleaner result. See
+`results/{rotten_tomatoes,letterboxd}/similar_k_sweep.csv` and the report's
+"Similar-film suggestions" section for the full breakdown.
+
 To rebuild the site after retraining a model:
 
 ```bash
