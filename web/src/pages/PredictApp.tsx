@@ -3,6 +3,9 @@ import type { AppData } from "../lib/useAppData";
 import { predictAll, topCriticMatches, mse } from "../lib/predict";
 import { FilmAutocomplete } from "../components/FilmAutocomplete";
 import { FilmTable } from "../components/FilmTable";
+import { NeuralHeadline } from "../components/NeuralHeadline";
+import { fetchLetterboxdDiary, matchDiaryToCatalog } from "../lib/letterboxdImport";
+import { serializeSettings, downloadTextFile, parseSettingsFile, readFileAsText } from "../lib/settingsFile";
 
 const MIN_SEEN = 5;
 
@@ -29,6 +32,8 @@ export function PredictApp({ data }: { data: AppData }) {
   const [predictIdxs, setPredictIdxs] = useState<number[]>([]);
   const [predictRatings, setPredictRatings] = useState<Record<number, number>>({});
   const [showMatches, setShowMatches] = useState(false);
+  const [lbUsername, setLbUsername] = useState("");
+  const [ioStatus, setIoStatus] = useState<{ type: "idle" | "loading" | "success" | "error"; message?: string }>({ type: "idle" });
 
   const genreOptions = useMemo(() => {
     const set = new Set<string>();
@@ -78,6 +83,66 @@ export function PredictApp({ data }: { data: AppData }) {
     });
   }
 
+  async function handleLetterboxdImport() {
+    setIoStatus({ type: "loading" });
+    try {
+      const entries = await fetchLetterboxdDiary(lbUsername);
+      const matches = matchDiaryToCatalog(entries, catalog.movies);
+      const toAdd = matches.filter((m) => !chosen.has(m.idx));
+      if (toAdd.length === 0) {
+        setIoStatus({
+          type: "error",
+          message: matches.length === 0
+            ? "None of that profile's rated diary films are in this 1,000-film catalog."
+            : "All of that profile's matched diary films are already in your lists.",
+        });
+        return;
+      }
+      setSeenIdxs((prev) => [...prev, ...toAdd.map((m) => m.idx)]);
+      setSeenRatings((prev) => {
+        const next = { ...prev };
+        for (const m of toAdd) next[m.idx] = Math.min(5, Math.max(1, Math.round(m.rating)));
+        return next;
+      });
+      setIoStatus({
+        type: "success",
+        message: `Imported ${toAdd.length} film${toAdd.length === 1 ? "" : "s"} from your Letterboxd diary (star ratings rounded to this app's 1-5 scale).`,
+      });
+    } catch (err) {
+      setIoStatus({ type: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  function handleSaveSettings() {
+    const text = serializeSettings("rotten_tomatoes", catalog.movies, seenIdxs, seenRatings, predictIdxs, predictRatings);
+    downloadTextFile(text, "palate-rotten-tomatoes-settings.txt");
+    setIoStatus({ type: "success", message: "Settings file downloaded." });
+  }
+
+  async function handleLoadSettings(file: File) {
+    try {
+      const text = await readFileAsText(file);
+      const parsed = parseSettingsFile(text, catalog.movies);
+      if ("error" in parsed) {
+        setIoStatus({ type: "error", message: parsed.error });
+        return;
+      }
+      setSeenIdxs(parsed.seen.map((s) => s.idx));
+      setSeenRatings(Object.fromEntries(parsed.seen.map((s) => [s.idx, s.rating])));
+      setPredictIdxs(parsed.predict.map((p) => p.idx));
+      setPredictRatings(Object.fromEntries(
+        parsed.predict.filter((p) => p.rating != null).map((p) => [p.idx, p.rating as number])
+      ));
+      setIoStatus({
+        type: "success",
+        message: `Loaded ${parsed.seen.length} seen film(s) and ${parsed.predict.length} predict film(s)`
+          + (parsed.unmatched ? ` (${parsed.unmatched} not in this catalog were skipped).` : "."),
+      });
+    } catch (err) {
+      setIoStatus({ type: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   const seenRatingsMap = useMemo(() => new Map(Object.entries(seenRatings).map(([k, v]) => [Number(k), v])), [seenRatings]);
 
   const seenValues = Object.values(seenRatings);
@@ -122,6 +187,41 @@ export function PredictApp({ data }: { data: AppData }) {
           </select>
         </label>
       </div>
+
+      <div className="io-toolbar">
+        <div className="io-group">
+          <label htmlFor="rt-lb-username">Import your Letterboxd diary</label>
+          <input
+            id="rt-lb-username"
+            type="text"
+            placeholder="Letterboxd username"
+            value={lbUsername}
+            onChange={(e) => setLbUsername(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleLetterboxdImport(); }}
+          />
+          <button type="button" className="btn-small" onClick={handleLetterboxdImport} disabled={ioStatus.type === "loading"}>
+            {ioStatus.type === "loading" ? "Importing…" : "Import"}
+          </button>
+        </div>
+        <div className="io-group">
+          <button type="button" className="btn-small" onClick={handleSaveSettings}>Save settings</button>
+          <label className="btn-small file-btn">
+            Load settings
+            <input
+              type="file"
+              accept=".txt,.json"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleLoadSettings(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+      </div>
+      {ioStatus.type !== "idle" && ioStatus.message && (
+        <p className={ioStatus.type === "error" ? "warn-box" : "info-box"}>{ioStatus.message}</p>
+      )}
 
       <section className="card-section">
         <h2>1. Films you have seen</h2>
@@ -272,6 +372,17 @@ function PredictionsView({
 
   return (
     <>
+      <h3 className="nn-headline-heading">Neural network prediction</h3>
+      <NeuralHeadline
+        predictIdxs={predictIdxs}
+        movies={movies}
+        label={label}
+        predictions={predictions}
+        groupNoun="critics"
+        hasAnyZ={hasAnyZ}
+      />
+
+      <h3 className="best-predictor-heading">Every method, side by side</h3>
       <div className="film-table-wrap">
         <table className="film-table predictions-table">
           <thead>
