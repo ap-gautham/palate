@@ -1,19 +1,18 @@
-// Import a visitor's real Letterboxd diary into "films you have seen" by
-// username. This is a static, serverless site, and Letterboxd does not
-// expose a public, CORS-enabled API, so the browser can't fetch
-// letterboxd.com directly -- this goes through a public CORS proxy instead
-// (api.allorigins.win). That's a real dependency on a third party staying
-// up; if it's down or rate-limits, the import fails with a clear error and
-// the visitor can still add films by hand. Only the visitor's *public*,
-// *recent* diary is available this way (Letterboxd's per-user RSS feed is
-// capped to their latest ~50 entries), not their full rating history.
+// Import a visitor's real Letterboxd ratings into "films you have seen" from
+// their own data export. This is a static, serverless site with no backend,
+// and Letterboxd has no public API and blocks unauthenticated scraping (its
+// RSS feed is capped to the ~50 most recent diary entries, and its HTML
+// pages sit behind a bot-check that a plain fetch can't pass) -- so there is
+// no reliable way to pull a visitor's full history live. Letterboxd's own
+// "Export Your Data" feature (Settings -> Import & Export) gives the
+// visitor a zip with ratings.csv (and diary.csv) covering every film
+// they've ever rated. Parsing that file client-side needs no network call
+// at all, so it's both more complete and more reliable than any live fetch.
 //
-// Shared by both datasets: this module only fetches and parses the feed into
-// a dataset-agnostic (title, year, star rating) list; each app page matches
+// Shared by both datasets: this module only parses the CSV into a
+// dataset-agnostic (title, year, star rating) list; each app page matches
 // those against its own catalog and rescales the 0.5-5 star rating to its
 // own widget (5-star for Rotten Tomatoes, 1-10 for Letterboxd).
-
-const CORS_PROXY = "https://api.allorigins.win/raw?url=";
 
 export interface LetterboxdDiaryEntry {
   title: string;
@@ -22,49 +21,82 @@ export interface LetterboxdDiaryEntry {
   rating: number | null;
 }
 
-/** Fetches and parses a public Letterboxd profile's RSS diary feed. Throws
- * with a message safe to show directly to the visitor. */
-export async function fetchLetterboxdDiary(username: string): Promise<LetterboxdDiaryEntry[]> {
-  const trimmed = username.trim().replace(/^@/, "");
-  if (!trimmed) throw new Error("Enter a Letterboxd username first.");
-  const rssUrl = `https://letterboxd.com/${encodeURIComponent(trimmed)}/rss/`;
+function parseCsvRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      field = "";
+      if (row.length > 1 || row[0] !== "") rows.push(row);
+      row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
 
-  let res: Response;
-  try {
-    res = await fetch(CORS_PROXY + encodeURIComponent(rssUrl));
-  } catch {
-    throw new Error("Couldn't reach the import service -- check your connection and try again.");
+/** Parses a Letterboxd export CSV (ratings.csv or diary.csv) into a rating
+ * list. Column order isn't assumed -- only that a header row names "Name",
+ * "Year" and "Rating" columns, which both of those files have. */
+export function parseLetterboxdCsv(text: string): { entries: LetterboxdDiaryEntry[] } | { error: string } {
+  const rows = parseCsvRows(text);
+  if (rows.length < 2) {
+    return { error: "That file doesn't look like a Letterboxd export CSV." };
   }
-  if (!res.ok) {
-    throw new Error(
-      res.status === 404
-        ? `No Letterboxd profile found for "${trimmed}".`
-        : `Couldn't reach Letterboxd (status ${res.status}). The import service may be down -- try again shortly.`
-    );
-  }
-  const text = await res.text();
-  const doc = new DOMParser().parseFromString(text, "text/xml");
-  if (doc.querySelector("parsererror")) {
-    throw new Error("Letterboxd returned something unexpected -- double-check the username and try again.");
-  }
-  const items = Array.from(doc.getElementsByTagName("item"));
-  if (items.length === 0) {
-    throw new Error(`No public diary entries found for "${trimmed}" -- check the username and that the profile is public.`);
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const nameIdx = header.indexOf("name");
+  const yearIdx = header.indexOf("year");
+  const ratingIdx = header.indexOf("rating");
+  if (nameIdx === -1 || ratingIdx === -1) {
+    return {
+      error: "That CSV doesn't have the expected columns -- upload ratings.csv or diary.csv from your Letterboxd data export.",
+    };
   }
 
   const entries: LetterboxdDiaryEntry[] = [];
-  for (const item of items) {
-    const filmTitle = item.getElementsByTagName("letterboxd:filmTitle")[0]?.textContent?.trim();
-    if (!filmTitle) continue;
-    const filmYearText = item.getElementsByTagName("letterboxd:filmYear")[0]?.textContent;
-    const ratingText = item.getElementsByTagName("letterboxd:memberRating")[0]?.textContent;
+  for (const r of rows.slice(1)) {
+    const title = r[nameIdx]?.trim();
+    if (!title) continue;
+    const yearText = yearIdx !== -1 ? r[yearIdx]?.trim() : "";
+    const ratingText = r[ratingIdx]?.trim();
     entries.push({
-      title: filmTitle,
-      year: filmYearText ? Number(filmYearText) : null,
+      title,
+      year: yearText ? Number(yearText) : null,
       rating: ratingText ? Number(ratingText) : null,
     });
   }
-  return entries;
+  if (entries.length === 0) {
+    return { error: "No rated films found in that file." };
+  }
+  return { entries };
 }
 
 export function normalizeTitle(title: string): string {

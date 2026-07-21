@@ -221,9 +221,9 @@ button { font: inherit; }
   margin: 0 0 16px; padding: 14px 16px; background: var(--code); border: 1px solid var(--line);
   border-radius: 10px;
 }
-.io-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.io-group label:not(.file-btn) {
-  font-size: 0.85rem; font-weight: 600; color: var(--muted); white-space: nowrap;
+.io-group { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.io-label-text {
+  font-size: 0.85rem; color: var(--muted); max-width: 46ch; line-height: 1.4;
 }
 .io-group input[type="text"] {
   padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line);

@@ -5,7 +5,7 @@ import { FilmAutocomplete } from "../components/FilmAutocomplete";
 import { FilmTable } from "../components/FilmTable";
 import { RatingInput } from "../components/RatingInput";
 import { NeuralHeadline } from "../components/NeuralHeadline";
-import { fetchLetterboxdDiary, matchDiaryToCatalog } from "../lib/letterboxdImport";
+import { parseLetterboxdCsv, matchDiaryToCatalog } from "../lib/letterboxdImport";
 import { serializeSettings, downloadTextFile, parseSettingsFile, readFileAsText } from "../lib/settingsFile";
 
 const MIN_SEEN = 5;
@@ -34,7 +34,6 @@ export function LetterboxdApp({ data }: { data: LetterboxdData }) {
   const [predictIdxs, setPredictIdxs] = useState<number[]>([]);
   const [predictRatings, setPredictRatings] = useState<Record<number, number>>({});
   const [showMatches, setShowMatches] = useState(false);
-  const [lbUsername, setLbUsername] = useState("");
   const [ioStatus, setIoStatus] = useState<{ type: "idle" | "loading" | "success" | "error"; message?: string }>({ type: "idle" });
 
   const genreOptions = useMemo(() => {
@@ -85,18 +84,23 @@ export function LetterboxdApp({ data }: { data: LetterboxdData }) {
     });
   }
 
-  async function handleLetterboxdImport() {
+  async function handleLetterboxdCsvImport(file: File) {
     setIoStatus({ type: "loading" });
     try {
-      const entries = await fetchLetterboxdDiary(lbUsername);
-      const matches = matchDiaryToCatalog(entries, catalog.movies);
+      const text = await readFileAsText(file);
+      const parsed = parseLetterboxdCsv(text);
+      if ("error" in parsed) {
+        setIoStatus({ type: "error", message: parsed.error });
+        return;
+      }
+      const matches = matchDiaryToCatalog(parsed.entries, catalog.movies);
       const toAdd = matches.filter((m) => !chosen.has(m.idx));
       if (toAdd.length === 0) {
         setIoStatus({
           type: "error",
           message: matches.length === 0
-            ? "None of that profile's rated diary films are in this 1,000-film catalog."
-            : "All of that profile's matched diary films are already in your lists.",
+            ? "None of your rated films are in this 1,000-film catalog."
+            : "All of your matched films are already in your lists.",
         });
         return;
       }
@@ -108,7 +112,7 @@ export function LetterboxdApp({ data }: { data: LetterboxdData }) {
       });
       setIoStatus({
         type: "success",
-        message: `Imported ${toAdd.length} film${toAdd.length === 1 ? "" : "s"} from your Letterboxd diary (star ratings rescaled to this app's 1-10 scale).`,
+        message: `Imported ${toAdd.length} film${toAdd.length === 1 ? "" : "s"} from your Letterboxd export (star ratings rescaled to this app's 1-10 scale).`,
       });
     } catch (err) {
       setIoStatus({ type: "error", message: err instanceof Error ? err.message : String(err) });
@@ -193,18 +197,23 @@ export function LetterboxdApp({ data }: { data: LetterboxdData }) {
 
       <div className="io-toolbar">
         <div className="io-group">
-          <label htmlFor="lb-lb-username">Import your Letterboxd diary</label>
-          <input
-            id="lb-lb-username"
-            type="text"
-            placeholder="Letterboxd username"
-            value={lbUsername}
-            onChange={(e) => setLbUsername(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleLetterboxdImport(); }}
-          />
-          <button type="button" className="btn-small" onClick={handleLetterboxdImport} disabled={ioStatus.type === "loading"}>
-            {ioStatus.type === "loading" ? "Importing…" : "Import"}
-          </button>
+          <span className="io-label-text">
+            Import your Letterboxd ratings: export your data from Letterboxd (Settings → Import & Export → Export
+            Your Data), unzip it, then upload ratings.csv or diary.csv here.
+          </span>
+          <label className="btn-small file-btn">
+            {ioStatus.type === "loading" ? "Importing…" : "Upload Letterboxd CSV"}
+            <input
+              type="file"
+              accept=".csv"
+              disabled={ioStatus.type === "loading"}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleLetterboxdCsvImport(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
         </div>
         <div className="io-group">
           <button type="button" className="btn-small" onClick={handleSaveSettings}>Save settings</button>
