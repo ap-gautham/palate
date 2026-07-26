@@ -5,14 +5,12 @@ import type { XgbModel, NNModel } from "../types";
 export type { XgbModel, NNModel, XgbTree, NNLayer, NNMeta } from "../types";
 
 /** Per-facet affinity sets (raw string values, gsimonx37 join), compared by
- * string-overlap in features.ts. Identical shape to the RT MovieFacets. */
+ * string-overlap in features.ts. Identical shape to the RT MovieFacets.
+ * Decade/country/studio were dropped from the feature contract. */
 export interface MovieFacets {
   genre: string[];
-  decade: string[];
   theme: string[];
   language: string[];
-  country: string[];
-  studio: string[];
   director: string[];
   actor: string[];
 }
@@ -21,17 +19,16 @@ export interface Movie {
   id: string;
   title: string;
   year: number | null;
-  genreId: number;
   nScores: number;
   facets: MovieFacets;
-  /** Fixed-vocab multi-hot ids (genre: 0..30, decade: 0..20). */
+  /** Fixed canonical-vocab genre multi-hot ids (0..19). */
   genreMh: number[];
-  decadeMh: number[];
+  /** Ids into `Catalog.themeMatrix`/`themeVocab` (theme_similarity.json). */
+  themeIds: number[];
   runtimeLog: number | null;
   gsRating: number | null;
   nThemesLog: number;
   nLanguagesLog: number;
-  nCountriesLog: number;
 }
 
 export interface Member {
@@ -56,6 +53,13 @@ export interface Catalog {
    * movie (K-means on content facets), position-aligned to `movies`. Used by
    * the predict-row suggestion dropdown. */
   similar: number[][];
+  /** Theme embedding cosine similarity, flattened row-major
+   * [themeVocab.length x themeVocab.length] (theme_similarity.json). */
+  themeMatrix: Float32Array;
+  themeVocab: string[];
+  /** sigma_u fallback for the affinity blocks' z-scores when a user's own
+   * seen-set std is ~0 -- see meta.json / features.py's `_facet_tail`. */
+  globalStd: number;
 }
 
 export interface MemberMatch {

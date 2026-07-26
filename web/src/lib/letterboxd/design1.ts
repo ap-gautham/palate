@@ -88,7 +88,7 @@ const TOPK_ABS = 10;
  * unchanged): restrict the neighbourhood to the `k` members with the largest
  * |sim| -- both strongly aligned and strongly anti-aligned -- then the
  * identical movie-mean-centered, magnitude-scaled formula. Mirrors
- * rotten_tomatoes/design1_analytic/analytic.py:predict_movie_topk_abs and
+ * rotten_tomatoes/analytic.py:predict_movie_topk_abs and
  * this file's `predictAnalytic`. */
 export function predictAnalyticTop10(
   catalog: Catalog,

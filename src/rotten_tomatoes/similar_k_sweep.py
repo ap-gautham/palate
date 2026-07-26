@@ -9,7 +9,7 @@ itself does not depend on k -- only the bucketing does -- so all three k
 sweeps score the SAME episodes (USERS_N x DRAWS_PER_USER), isolating exactly
 the effect of how "similar" is defined.
 
-Run from src/:  python -m rotten_tomatoes.design1_analytic.similar_k_sweep
+Run from src/:  python -m rotten_tomatoes.similar_k_sweep
 Outputs: results/rotten_tomatoes/figures/plotD_similar_k_sweep.png,
          results/rotten_tomatoes/tables/similar_k_sweep.csv
 """
@@ -23,7 +23,7 @@ import pandas as pd
 
 from rotten_tomatoes.config import DATA_PROCESSED, FIGURES, ROOT, SEED, TABLES
 from rotten_tomatoes import movie_features as MF
-from .predict import critic_matches, predict
+from .predict_analytic import critic_matches, predict
 
 N_SEEN = 10
 K_SHRINK = 8
@@ -74,7 +74,9 @@ def sample_episodes(scores: pd.DataFrame, critic_ratings: dict, id_to_pos: dict)
             pred = float(pred_df.loc[target_mid, "prediction"])
             true = critic_ratings[critic][target_mid]
             seen_positions = frozenset(id_to_pos[m] for m in seen_mids if m in id_to_pos)
-            episodes.append((id_to_pos[target_mid], seen_positions, (pred - true) ** 2))
+            # store the raw signed error: rmse() below squares internally, so
+            # appending a squared error here would compute sqrt(mean(err^4))
+            episodes.append((id_to_pos[target_mid], seen_positions, pred - true))
     return episodes
 
 
@@ -102,9 +104,9 @@ def run() -> pd.DataFrame:
         similar = MF.top_similar(movies_json, consensus, k_neighbors=k, seed=SEED)
         similar_sets = [frozenset(s) for s in similar]
         buckets: dict[str, list[float]] = {}
-        for target_pos, seen_positions, se in episodes:
+        for target_pos, seen_positions, err in episodes:
             count = len(similar_sets[target_pos] & seen_positions)
-            buckets.setdefault(bucket_label(count), []).append(se)
+            buckets.setdefault(bucket_label(count), []).append(err)
         for label, errs in buckets.items():
             rows.append({"k_neighbors": k, "similar_seen": label,
                         "n_episodes": len(errs), "rmse": rmse(errs)})

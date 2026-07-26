@@ -13,7 +13,7 @@ interface Accumulator {
 }
 
 /** Shrunk Pearson alignment + magnitude scale per critic, from the user's
- * seen-film ratings. Mirrors design1_analytic/predict.py:critic_matches.
+ * seen-film ratings. Mirrors predict_analytic.py:critic_matches.
  *
  * Pearson correlation is invariant to each side's own affine (mean/scale)
  * transform, so `sim` is identical whether computed in raw or z units --

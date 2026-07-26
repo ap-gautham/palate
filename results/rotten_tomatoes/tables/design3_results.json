@@ -1,6 +1,6 @@
 {
-  "test_rmse": 0.7906720716060072,
-  "test_rmse_z": 0.8639851093557349,
+  "test_rmse": 0.8091483507588202,
+  "test_rmse_z": 0.8734267418195253,
   "ensemble_size": 3,
-  "test_rows": 42339
+  "test_rows": 42393
 }

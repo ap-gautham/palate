@@ -1,7 +1,7 @@
 """Design 1 driver: sweep the shrinkage k on validation, then score the shared
 paired/nested test episodes for the analytic formula and the four baselines.
 
-Run from src/:  python -m design1_analytic.run
+Run from src/:  python -m rotten_tomatoes.train_analytic
 
 Outputs (results/tables/):
   ksweep_validation.csv, k_star.json, nsweep_records.parquet,

@@ -1,9 +1,10 @@
-"""One-off check: run the Python app-inference path on the exact same
-synthetic user as web/scripts/validate_letterboxd.ts and diff against its
-JSON output, to confirm the Letterboxd TypeScript port matches Python to
-floating-point precision. Reads the SAME browser export (web/public/data/
-letterboxd/) the JS side reads, so both operate on the identical top-1000-film
-submatrix. Not part of the reproducible pipeline; safe to delete after use.
+"""One-off check: run the Python app-inference path (predict_analytic/
+_xgboost/_neural) on the exact same synthetic user as
+web/scripts/validate_letterboxd.ts and diff against its JSON output, to
+confirm the Letterboxd TypeScript port matches Python to floating-point
+precision. Reads the SAME browser export (web/public/data/letterboxd/) the
+JS side reads, so both operate on the identical top-1000-film submatrix. Not
+part of the reproducible pipeline; safe to delete after use.
 """
 import json
 import sys
@@ -11,17 +12,19 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import xgboost as xgb
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from letterboxd import features as F
-from letterboxd.analyze import TOPK_ABS, load_nn, nn_predict, topk_abs_prediction
+from letterboxd import pseudo_users as PU
+from letterboxd import predict_analytic as d1
+from letterboxd import predict_xgboost as d2
+from letterboxd import predict_neural as d3
 
 WEB_DATA = ROOT / "web" / "public" / "data" / "letterboxd"
 RATING_MIN, RATING_MAX = 1.0, 10.0
-K_SHRINK = F.K_SHRINK
+K_SHRINK = PU.K_SHRINK
 
 js = json.loads((ROOT / "web" / "js_validate_lb_out.json").read_text())
 
@@ -42,58 +45,42 @@ members = members_meta.rename(columns={"ratingSum": "rating_sum", "ratingCount":
 user = pd.Series({row["movie_id"]: float(row["rating"]) for row in js["seen"]})
 target_ids = js["target_ids"]
 target_scores = scores[scores["movie_id"].isin(target_ids)]
-movie_genre = movies.set_index("id")["genreId"].to_dict()
-unknown_genre_id = max(movie_genre.values(), default=0) + 1
 full_movies = pd.read_parquet(ROOT / "data" / "letterboxd" / "processed" / "movies.parquet")
 mf = F.load_project_movie_facets(full_movies)
+theme_sim = F.load_project_theme_similarity()
+# Approximates the training-time sigma_u fallback (LBData.global_std, over
+# the full member matrix) with this browser export's own rating spread --
+# only affects episodes whose seen-set std is ~0, a rare edge case.
+global_std = float(scores["rating"].std())
 
-matches = F.app_similarity(scores, user, K_SHRINK)
+matches = d1.member_matches(scores, user, K_SHRINK)
+formula = d1.predict(target_scores, matches, RATING_MIN, RATING_MAX)
+formula_topk = d1.predict_topk_abs(target_scores, matches, RATING_MIN, RATING_MAX)
 
-# Design 1 analytic (same formula as web/src/lib/letterboxd/design1.ts)
-rows = []
-rows_topk = []
-for mid, group in target_scores.groupby("movie_id"):
-    peer_sim = group["user_id"].map(matches["sim"]).fillna(0.0).to_numpy()
-    peer_mag = group["user_id"].map(matches["mag_sim"]).fillna(1.0).to_numpy()
-    values = group["rating"].to_numpy(dtype=float)
-    movie_mean = group["rating"].mean()
-    weight = np.abs(peer_sim)
-    num = ((weight * movie_mean + peer_sim * (values - movie_mean)) * peer_mag).sum()
-    pred = movie_mean if weight.sum() == 0 else float(num / weight.sum())
-    rows.append((mid, float(np.clip(pred, RATING_MIN, RATING_MAX)), float(movie_mean)))
-    topk_pred = float(np.clip(topk_abs_prediction(peer_sim, peer_mag, values, k=TOPK_ABS),
-                              RATING_MIN, RATING_MAX))
-    rows_topk.append((mid, topk_pred))
-analytic = pd.DataFrame(rows, columns=["movie_id", "prediction", "movie_mean"]).set_index("movie_id")
-analytic_topk = pd.DataFrame(rows_topk, columns=["movie_id", "prediction"]).set_index("movie_id")
+xgb_model = d2.load_model(ROOT / "results" / "letterboxd" / "models" / "letterboxd_xgboost.json")
+xgb = d2.predict(scores, user, target_scores, members, K_SHRINK, xgb_model, mf,
+                theme_sim, global_std, RATING_MIN, RATING_MAX)
 
-feats, feat_movie_ids = F.app_features(target_scores, matches, members, user, movie_genre, unknown_genre_id, mf)
-feats = feats[F.FEATURE_COLS]
-
-xgb_model = xgb.Booster()
-xgb_model.load_model(str(ROOT / "results" / "letterboxd" / "models" / "letterboxd_xgboost.json"))
-xgb_pred = pd.Series(np.clip(xgb_model.predict(xgb.DMatrix(feats)), RATING_MIN, RATING_MAX),
-                     index=feat_movie_ids)
-
-nn_ckpt = load_nn()
-nn_pred = pd.Series(nn_predict(nn_ckpt, feats), index=feat_movie_ids)
+nn_ckpt = d3.load_checkpoint(ROOT / "results" / "letterboxd" / "models" / "letterboxd_neural.pt")
+nn = d3.predict(scores, user, target_scores, members, K_SHRINK, nn_ckpt, mf,
+                theme_sim, global_std, RATING_MIN, RATING_MAX)
 
 max_diffs = {"analytic": 0.0, "movie_mean": 0.0, "analytic_topk": 0.0, "xgboost": 0.0, "neural_net": 0.0}
 rows_out = []
 for p in js["predictions"]:
     mid = p["movie_id"]
-    d_analytic = abs(p["analytic"] - analytic.loc[mid, "prediction"])
-    d_mean = abs(p["movie_mean"] - analytic.loc[mid, "movie_mean"])
-    d_topk = abs(p["analytic_topk"] - analytic_topk.loc[mid, "prediction"])
-    d_xgb = abs(p["xgboost"] - xgb_pred.loc[mid])
-    d_nn = abs(p["neural_net"] - nn_pred.loc[mid])
+    d_analytic = abs(p["analytic"] - formula.loc[mid, "prediction"])
+    d_mean = abs(p["movie_mean"] - formula.loc[mid, "movie_mean"])
+    d_topk = abs(p["analytic_topk"] - formula_topk.loc[mid, "prediction"])
+    d_xgb = abs(p["xgboost"] - xgb.loc[mid])
+    d_nn = abs(p["neural_net"] - nn.loc[mid])
     max_diffs["analytic"] = max(max_diffs["analytic"], d_analytic)
     max_diffs["movie_mean"] = max(max_diffs["movie_mean"], d_mean)
     max_diffs["analytic_topk"] = max(max_diffs["analytic_topk"], d_topk)
     max_diffs["xgboost"] = max(max_diffs["xgboost"], d_xgb)
     max_diffs["neural_net"] = max(max_diffs["neural_net"], d_nn)
-    rows_out.append((mid, p["analytic"], analytic.loc[mid, "prediction"],
-                     p["xgboost"], xgb_pred.loc[mid], p["neural_net"], nn_pred.loc[mid]))
+    rows_out.append((mid, p["analytic"], formula.loc[mid, "prediction"],
+                     p["xgboost"], xgb.loc[mid], p["neural_net"], nn.loc[mid]))
 
 print(f"{'movie':35s} {'js_D1':>7s} {'py_D1':>7s} {'js_XGB':>7s} {'py_XGB':>7s} {'js_NN':>7s} {'py_NN':>7s}")
 for mid, ja, pa, jx, px, jn, pn in rows_out[:12]:

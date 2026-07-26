@@ -2,7 +2,7 @@
 three designs and baselines, styled to match the Rotten Tomatoes figures, plus
 an honest cross-dataset comparison.
 
-Mirrors rotten_tomatoes.comparison.analysis. One deterministic pass over paired
+Mirrors rotten_tomatoes.analyze. One deterministic pass over paired
 test-member episodes scores B1 global mean, B3 consensus (movie) mean, B4 top-k
 similar mean, Design 1 analytic, Design 2 XGBoost, and Design 3 neural on an
 identical (member, target, draw) set at every seen-count n.
@@ -27,6 +27,9 @@ import xgboost as xgb
 from .config import (MODELS, MOVIES_PARQUET, RATING_MAX, RATING_MIN, RATINGS_PARQUET,
                      RESULTS, SEED)
 from . import features as F
+from . import pseudo_users as PU
+from .pseudo_users import rmse
+from .analytic import predict_movie, predict_movie_topk_abs
 
 FIGURES = RESULTS / "figures"
 RT_SUMMARY = RESULTS.parent / "rotten_tomatoes" / "tables" / "model_summary.csv"
@@ -36,31 +39,6 @@ N_ORDER = [3, 5, 10, 20, 50, -1]
 N_TICK = ["3", "5", "10", "20", "50", "all"]
 TOPK = 10
 TOPK_ABS = 10   # Design 1 top-|sim| variant: the k largest-|sim| peers, +/-
-
-
-def topk_abs_prediction(sim: np.ndarray, mag: np.ndarray, values: np.ndarray,
-                        k: int = TOPK_ABS) -> float:
-    """A new variation of Design 1 (the full-neighbourhood `analytic` formula
-    below is unchanged): restrict the neighbourhood to the ``k`` raters with
-    the largest |sim| -- both strongly aligned and strongly anti-aligned, not
-    just positively-aligned like the B4 baseline -- then the identical
-    movie-mean-centered, magnitude-scaled formula. Mirrors
-    rotten_tomatoes/design1_analytic/analytic.py's predict_movie_topk_abs,
-    just taking already-sliced per-target peer arrays instead of a Split
-    lookup (this loop already has them). UNCLIPPED -- the raw-track caller
-    clips to [RATING_MIN, RATING_MAX]; the z-track caller must convert back
-    to the raw scale first, exactly like `analytic`/`analytic_z` already do.
-    """
-    if len(values) == 0:
-        return 0.0
-    order = np.argsort(-np.abs(sim))[:k]
-    s, m, v = sim[order], mag[order], values[order]
-    mean_topk = float(v.mean())
-    weight = np.abs(s)
-    den = float(weight.sum())
-    if den <= 0:
-        return mean_topk
-    return float(((weight * mean_topk + s * (v - mean_topk)) * m).sum() / den)
 
 # dataviz palette (matches the RT figures)
 C = {"design1": "#2a78d6", "design1_topk": "#7a4fd6", "design2": "#008300", "design3": "#4a3aa7",
@@ -74,10 +52,6 @@ LABEL = {"design1": "Design 1 · member mean + magnitude",
          "zero": "B1 · global mean score"}
 FLAT = {"zero", "critic_mean"}
 SURFACE = "#fcfcfb"
-
-
-def rmse(err):
-    return float(np.sqrt(np.mean(np.square(err))))
 
 
 def style_ax(ax):
@@ -96,9 +70,9 @@ def load_xgb(name="letterboxd_xgboost.json"):
     path = MODELS / name
     if not path.exists():
         return None
-    booster = xgb.Booster()
-    booster.load_model(str(path))
-    return booster
+    model = xgb.XGBRegressor()
+    model.load_model(str(path))
+    return model
 
 
 def load_nn(name="letterboxd_neural.pt"):
@@ -116,22 +90,19 @@ def nn_predict_raw(ckpt, feats: pd.DataFrame) -> np.ndarray:
     import torch
     from .network import TabularResNet
     numeric = feats[ckpt["numeric_cols"]].to_numpy(np.float32).copy()
-    genre = feats["genre_id"].to_numpy(np.int64)
     log_idx = np.array([ckpt["numeric_cols"].index(c) for c in ckpt["log_cols"]])
     numeric[:, log_idx] = np.log1p(np.clip(numeric[:, log_idx], 0, None))
     nan = np.isnan(numeric)
     numeric[nan] = np.take(ckpt["mu_impute"], np.where(nan)[1])
     numeric = (numeric - ckpt["mu"]) / ckpt["sd"]
     num_t = torch.from_numpy(numeric.copy())
-    gen_t = torch.from_numpy(genre.copy())
     preds = np.zeros(len(feats), dtype=np.float64)
     for state in ckpt["state_dicts"]:
-        model = TabularResNet(len(ckpt["numeric_cols"]), ckpt["n_genres"], ckpt["emb_dim"],
-                              ckpt["width"], ckpt["depth"], ckpt["dropout"])
+        model = TabularResNet(len(ckpt["numeric_cols"]), ckpt["width"], ckpt["depth"], ckpt["dropout"])
         model.load_state_dict(state)
         model.eval()
         with torch.no_grad():
-            preds += model(num_t, gen_t).numpy()
+            preds += model(num_t).numpy()
     return preds / len(ckpt["state_dicts"])
 
 
@@ -140,9 +111,9 @@ def nn_predict(ckpt, feats: pd.DataFrame) -> np.ndarray:
 
 
 # ---- evaluation ------------------------------------------------------------
-def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt, fc: F.FacetContext,
+def evaluate(data: PU.LBData, test_members: np.ndarray, xgb_model, nn_ckpt, fc: F.FacetContext,
              targets_per_user=8, draws=3, n_max_finite=50,
-             data_z: F.LBData | None = None, xgb_model_z=None, nn_ckpt_z=None):
+             data_z: PU.LBData | None = None, xgb_model_z=None, nn_ckpt_z=None):
     """One pass over paired episodes; returns a records DataFrame with per-method
     predictions and the collected feature rows for the learned models. If
     ``data_z`` is given, also computes the z-score track (converted back to
@@ -150,9 +121,9 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt, fc: F
     episodes whose seen ratings have ~zero variance."""
     records, feature_rows = [], []
     z_feature_rows, z_mus, z_sigmas, z_valid = [], [], [], []
-    for (member, target_col, y, n, draw, seen_cols, seen_vals) in F.iter_paired_episodes(
+    for (member, target_col, y, n, draw, seen_cols, seen_vals) in PU.iter_paired_episodes(
             data, test_members, N_GRID, targets_per_user, draws, n_max_finite):
-        sim, mag, overlap = F.similarity(data, seen_cols, seen_vals, member)
+        sim, mag, overlap = PU.similarity(data, seen_cols, seen_vals, member)
         raters, values = F.target_raters(data, target_col, member)
         if len(raters) < F.MIN_OTHER_REVIEWERS:
             continue
@@ -161,11 +132,8 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt, fc: F
         b1 = data.global_mean                                  # B1
         order = np.argsort(-r_sim)[:TOPK]                      # B4
         b4 = float(values[order].mean()) if len(order) else consensus
-        weight = np.abs(r_sim)
-        num = ((weight * consensus + r_sim * (values - consensus)) * r_mag).sum()
-        analytic = consensus if weight.sum() == 0 else float(num / weight.sum())
-        analytic = float(np.clip(analytic, RATING_MIN, RATING_MAX))
-        topk_abs = float(np.clip(topk_abs_prediction(r_sim, r_mag, values, k=TOPK_ABS),
+        analytic = predict_movie(r_sim, r_mag, values, RATING_MIN, RATING_MAX)
+        topk_abs = float(np.clip(predict_movie_topk_abs(r_sim, r_mag, values, k=TOPK_ABS),
                                  RATING_MIN, RATING_MAX))
 
         positive_overlap = overlap[overlap > 0]
@@ -174,9 +142,8 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt, fc: F
                 "max_overlap": float(overlap.max()) if len(overlap) else 0.0,
                 "n_reviewers": int(len(raters)),
                 "dispersion": float(data.movie_std[target_col]),
-                "genre_id": int(data.genre_id[target_col]),
                 "user_mean": float(np.mean(seen_vals))}
-        tail.update(F.facet_tail_from_context(fc, seen_cols, seen_vals - seen_vals.mean(), target_col))
+        tail.update(F.facet_tail_from_context(fc, seen_cols, seen_vals, target_col))
         feature_rows.append(F.main_feature_row(r_sim, F.target_deviations(data, raters, values), tail))
 
         row = {"member": member, "n": n, "draw": draw, "y": y,
@@ -188,16 +155,19 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt, fc: F
             sigma = float(np.std(seen_vals, ddof=0))
             if sigma > 1e-9:
                 seen_z = (seen_vals - mu) / sigma
-                sim_z, mag_z, _ = F.similarity(data_z, seen_cols, seen_z, member)
+                sim_z, mag_z, _ = PU.similarity(data_z, seen_cols, seen_z, member)
                 raters_z, values_z = F.target_raters(data_z, target_col, member)
                 if len(raters_z) >= F.MIN_OTHER_REVIEWERS:
                     rz_sim, rz_mag = sim_z[raters_z], mag_z[raters_z]
+                    # z-track: unclipped on the z scale -- predict_movie clips
+                    # to [RATING_MIN, RATING_MAX], which is wrong here; clip
+                    # only after mu + sigma * pred converts back to raw below.
                     consensus_z = float(values_z.mean())
                     weight_z = np.abs(rz_sim)
                     num_z = ((weight_z * consensus_z + rz_sim * (values_z - consensus_z)) * rz_mag).sum()
                     analytic_z = consensus_z if weight_z.sum() == 0 else float(num_z / weight_z.sum())
                     row["design1_z"] = float(np.clip(mu + sigma * analytic_z, RATING_MIN, RATING_MAX))
-                    topk_abs_z = topk_abs_prediction(rz_sim, rz_mag, values_z, k=TOPK_ABS)
+                    topk_abs_z = predict_movie_topk_abs(rz_sim, rz_mag, values_z, k=TOPK_ABS)
                     row["design1_topk_z"] = float(np.clip(mu + sigma * topk_abs_z, RATING_MIN, RATING_MAX))
 
                     z_result = F.episode_feature_row_z(data, data_z, seen_cols, seen_vals, target_col, member, fc)
@@ -220,9 +190,8 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt, fc: F
         records.append(row)
     rec = pd.DataFrame(records)
     feats = pd.DataFrame(feature_rows, columns=F.FEATURE_COLS)
-    feats["genre_id"] = feats["genre_id"].astype(int)
     if xgb_model is not None:
-        rec["design2"] = np.clip(xgb_model.predict(xgb.DMatrix(feats[F.FEATURE_COLS])),
+        rec["design2"] = np.clip(xgb_model.predict(feats[F.FEATURE_COLS]),
                                  RATING_MIN, RATING_MAX)
     if nn_ckpt is not None:
         rec["design3"] = nn_predict(nn_ckpt, feats)
@@ -233,11 +202,10 @@ def evaluate(data: F.LBData, test_members: np.ndarray, xgb_model, nn_ckpt, fc: F
         rec["design3_z"] = np.nan
         if z_feature_rows:
             z_feats = pd.DataFrame(z_feature_rows, columns=F.FEATURE_COLS)
-            z_feats["genre_id"] = z_feats["genre_id"].astype(int)
             z_mus_arr, z_sigmas_arr = np.asarray(z_mus), np.asarray(z_sigmas)
             valid_idx = rec.index[z_valid]
             if xgb_model_z is not None:
-                pred_z = xgb_model_z.predict(xgb.DMatrix(z_feats[F.FEATURE_COLS]))
+                pred_z = xgb_model_z.predict(z_feats[F.FEATURE_COLS])
                 rec.loc[valid_idx, "design2_z"] = np.clip(
                     z_mus_arr + z_sigmas_arr * pred_z, RATING_MIN, RATING_MAX)
             if nn_ckpt_z is not None:
@@ -335,7 +303,7 @@ def plot_c(rec, methods):
     plt.close(fig)
 
 
-def plot_score_distributions(data: F.LBData, ratings: pd.DataFrame):
+def plot_score_distributions(data: PU.LBData, ratings: pd.DataFrame):
     fig, axes = plt.subplots(1, 3, figsize=(12, 3.6), dpi=180)
     fig.patch.set_facecolor(SURFACE)
     axes[0].hist(ratings["rating"], bins=np.arange(0.5, 11.5, 1), color="#2a78d6",
@@ -397,13 +365,13 @@ def main():
     started = time.time()
     ratings = pd.read_parquet(RATINGS_PARQUET)
     movies = pd.read_parquet(MOVIES_PARQUET)
-    data = F.build_data(ratings, movies)
-    data_z = F.build_data(ratings, movies, value="z")
-    parts = F.partition_members(data)
+    data = PU.build_data(ratings, movies)
+    data_z = PU.build_data(ratings, movies, value="z")
+    parts = PU.partition_members(data)
     test_members = parts["test"][:300]
     print(f"built matrix {data.n_members}x{data.n_movies}; {len(test_members)} test members "
           f"({time.time()-started:.0f}s)")
-    fc = F.build_facet_context(movies, data.movies)
+    fc = F.build_facet_context(movies, data.movies, data.global_std)
 
     xgb_model, nn_ckpt = load_xgb(), load_nn()
     xgb_model_z = load_xgb("letterboxd_xgboost_z.json")

@@ -36,7 +36,16 @@ function loadCatalog(): Catalog {
     byMovie[m].criticIdx[c] = criticIdx[i];
     byMovie[m].score[c] = score[i];
   }
-  return { movies, critics, byMovie };
+  const similar = readJson<number[][]>("similar.json");
+  const themeSim = readJson<{ themes: string[]; matrix: number[][] }>("theme_similarity.json");
+  const themeWidth = themeSim.themes.length;
+  const themeMatrix = new Float32Array(themeWidth * themeWidth);
+  for (let i = 0; i < themeWidth; i++) themeMatrix.set(themeSim.matrix[i], i * themeWidth);
+  const kShrinkMeta = readJson<{ kShrink: number; globalStd: number }>("k_shrink.json");
+  return {
+    movies, critics, byMovie, similar,
+    themeMatrix, themeVocab: themeSim.themes, globalStd: kShrinkMeta.globalStd,
+  };
 }
 
 function loadXgb(name: string): XgbModel {

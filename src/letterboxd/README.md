@@ -1,7 +1,9 @@
 # Letterboxd community-rating project
 
 This package mirrors the Rotten Tomatoes project (`src/rotten_tomatoes/`)
-directory-for-directory, while preserving the important data difference: a
+module-for-module — same flat layout, same file names, same split between
+`pseudo_users.py` (matrix + similarity + episode protocol) and `features.py`
+(the feature contract) — while preserving the important data difference: a
 Letterboxd rating is already a direct member score on the integer **1–10**
 scale. There is no score parsing, critic publication, or Tomatometer feature.
 All three designs adopt the same **similarity-decile-plus-movie-facet
@@ -33,7 +35,15 @@ encodes the year, so the join is more reliable here than on RT).
 
 ## Reproduction
 
-Place the Kaggle export files in `data/letterboxd/raw/`, then run from `src/`:
+Place the Kaggle export files in `data/letterboxd/raw/`, then from the
+repository root:
+
+```bash
+make lb            # preprocess -> train_xgboost -> train_neural -> analyze
+make lb-export     # browser data for web/
+```
+
+Or one stage at a time from `src/` (what the make targets run):
 
 ```bash
 ../.venv/bin/python -m letterboxd.preprocess --max-users 100000
@@ -54,10 +64,9 @@ films) — no rows are randomly discarded.
 Per (member profile, target film) episode: ten deciles of `similarity x
 (rater score - that rater's leave-one-out all-time mean)` — mean, count, and
 std per decile (30 columns) — plus a tail of `n_observed`, `mean_overlap`,
-`max_overlap`, `n_reviewers`, `dispersion`, `genre_id`, `user_mean`, an
-8-facet affinity dev/cnt pair (16 columns), a genre+decade multi-hot (51
-columns), and a small numeric tail (runtime, external rating, facet counts) —
-110 columns in total. `features.py` provides both a sparse-matrix path
+`max_overlap`, `n_reviewers`, `dispersion`, `user_mean`, the per-genre /
+theme / actor / director affinity blocks (77 columns), and a small numeric
+tail (runtime, external rating, facet counts) — 115 columns in total. `features.py` provides both a sparse-matrix path
 (`build_data`, `similarity`, `episode_feature_row`,
 `generate_rows`/`generate_paired_rows`) used for training and analysis, and a
 DataFrame app-path (`app_similarity`, `app_features`) used by the browser
@@ -67,7 +76,7 @@ caches the gsimonx37 join that feeds the facet columns.
 ## Design 3: inductive, not transductive
 
 Design 3 is a residual tabular MLP (`network.py`, identical architecture to
-RT's `design3_neural/network.py`) trained on the same ~110 engineered
+RT's `network.py`) trained on the same ~110 engineered
 features — **inductive**, so it scores a brand-new member's live ratings in
 the browser, unlike a member/movie embedding model (which can only predict
 for members it saw during training). It is genuinely trained
@@ -76,7 +85,7 @@ for members it saw during training). It is genuinely trained
 ## Evaluation and leakage rules
 
 `letterboxd.analyze` runs the same **paired/nested seen-history sweep** as RT's
-`comparison.analysis`: a fixed set of 8 target films per test member (300
+`rotten_tomatoes.analyze`: a fixed set of 8 target films per test member (300
 deterministic members with more than 50 rated films), 3 popularity-ordered
 seen-order redraws, with every seen-count `n` (and every baseline) scored on an
 identical (member, target, draw) set. The held-out rating is removed from that

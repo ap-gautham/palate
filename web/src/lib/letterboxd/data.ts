@@ -15,13 +15,15 @@ async function fetchBuffer(path: string): Promise<ArrayBuffer> {
 }
 
 export async function loadCatalog(): Promise<Catalog> {
-  const [movies, members, memberIdxBuf, movieIdxBuf, scoreBuf, similar] = await Promise.all([
+  const [movies, members, memberIdxBuf, movieIdxBuf, scoreBuf, similar, themeSim, meta] = await Promise.all([
     fetchJson<Movie[]>("movies.json"),
     fetchJson<Member[]>("members.json"),
     fetchBuffer("ratings_member_idx.bin"),
     fetchBuffer("ratings_movie_idx.bin"),
     fetchBuffer("ratings_score.bin"),
     fetchJson<number[][]>("similar.json").catch(() => []),
+    fetchJson<{ themes: string[]; matrix: number[][] }>("theme_similarity.json"),
+    fetchJson<{ globalStd: number }>("meta.json").catch(() => ({ globalStd: 1 })),
   ]);
   const memberIdx = new Uint16Array(memberIdxBuf);
   const movieIdx = new Uint16Array(movieIdxBuf);
@@ -41,8 +43,14 @@ export async function loadCatalog(): Promise<Catalog> {
     byMovie[m].score[c] = score[i];
   }
   const similarByMovie = movies.map((_, i) => similar[i] ?? []);
+  const themeWidth = themeSim.themes.length;
+  const themeMatrix = new Float32Array(themeWidth * themeWidth);
+  for (let i = 0; i < themeWidth; i++) themeMatrix.set(themeSim.matrix[i], i * themeWidth);
 
-  return { movies, members, byMovie, similar: similarByMovie };
+  return {
+    movies, members, byMovie, similar: similarByMovie,
+    themeMatrix, themeVocab: themeSim.themes, globalStd: meta.globalStd,
+  };
 }
 
 async function loadXgb(xgbFile: string): Promise<XgbModel> {

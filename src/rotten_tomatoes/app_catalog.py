@@ -1,4 +1,4 @@
-"""Export model-compatible catalog assets consumed by web_export.export ->
+"""Export model-compatible catalog assets consumed by web_export ->
 the browser app."""
 import json
 
@@ -14,7 +14,7 @@ MODEL_META_FILE = MODELS / "design2_xgboost_meta.json"
 def main() -> None:
     if not MODEL_META_FILE.exists():
         raise FileNotFoundError(
-            f"Run design2_xgboost.train before exporting the catalog: {MODEL_META_FILE}")
+            f"Run rotten_tomatoes.train_xgboost before exporting the catalog: {MODEL_META_FILE}")
     model_meta = json.loads(MODEL_META_FILE.read_text())
     genre_to_id = model_meta["genre_to_id"]
     unknown_genre_id = int(model_meta["unknown_genre_id"])

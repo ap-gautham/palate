@@ -5,7 +5,7 @@ function clamp(x: number, lo: number, hi: number): number {
 }
 
 /** Walks each tree from the native XGBoost JSON dump. Mirrors
- * design2_xgboost/predict.py (xgb.Booster.predict), -1 marks a leaf.
+ * predict_xgboost.py (XGBRegressor.predict), -1 marks a leaf.
  * `range` defaults to the Rotten Tomatoes 0-5 scale; pass [1,10] for
  * Letterboxd. */
 export function predictXgb(

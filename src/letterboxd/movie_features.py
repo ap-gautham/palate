@@ -1,19 +1,27 @@
 """Join this project's own film catalog to the gsimonx37/letterboxd Kaggle
-metadata dump (genres, themes, studios, cast, crew, countries, languages) by
-normalized (title, year), producing per-film facet sets and a small numeric
-tail. This gives the trained models real movie content beyond the single
-first-listed genre previously used, and lets a member's own seen history
-establish per-facet taste ("this member over-rates A24 films / Tarantino /
-1990s films") via the affinity features built downstream in `features.py`
-(this module only supplies the facet *sets*, not the affinity numbers).
+metadata dump (genres, themes, cast, crew, languages) by normalized (title,
+year), producing per-film facet sets, a canonical genre vocabulary, a theme
+embedding similarity matrix, and a small numeric tail. This gives the trained
+models real movie content beyond the single first-listed genre previously
+used, and lets a member's own seen history establish per-facet taste ("this
+member over-rates Tarantino / Denis Villeneuve / horror films") via the
+affinity features built downstream in `features.py` (this module only
+supplies the facet *sets* and the theme similarity matrix, not the affinity
+numbers themselves).
 
-Design: each of the eight facets below gets a user-affinity feature pair
-(mean deviation + confidence on seen films sharing that facet) in
-`features.py`. Only the two genuinely low-cardinality facets, genre and
-decade, also get a target-side multi-hot descriptor (a global base-rate
-signal); the high-cardinality facets (theme/language/country/studio/
-director/actor) rely on the affinity pair alone, to avoid an unmanageable
-one-hot width and unreliable rare-category statistics.
+Five facets: genre, theme, language, director, actor. Decade, country and
+studio were dropped -- decade duplicates the `year` numeric already in the
+row, and country/studio proved low-signal for the columns they cost (an
+earlier iteration carried all eight; see report.pdf's feature-engineering
+section for the full comparison). Genre is low-cardinality and canonical (the
+19 gsimonx37 genre names, fixed, not frequency-ranked) so it gets a per-genre
+affinity block built directly off this vocab in `features.py`; theme is
+higher-cardinality (109 values) but each one is a descriptive English phrase,
+so it is embedded with a sentence-transformer instead of one-hot, letting
+"Gothic and eerie haunting horror" and "Terrifying, haunted, and supernatural
+horror" be recognized as close even though they share no facet string;
+language/director/actor rely on affinity/overlap features computed straight
+from the facet sets (no multi-hot).
 
 This module is duplicated near-verbatim in
 `rotten_tomatoes/movie_features.py` so the two projects stay fully
@@ -28,20 +36,27 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
-from scipy.cluster.vq import kmeans2
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 
 from .config import PROCESSED, RAW, SEED
 
 GSIMONX37_DIR = RAW / "gsimonx37"
 FACETS_CACHE = PROCESSED / "movie_facets.pkl"
+THEME_SIM_CACHE = PROCESSED / "theme_similarity.npz"
 
-FACETS = ["genre", "decade", "theme", "language", "country", "studio", "director", "actor"]
-MULTIHOT_FACETS = ["genre", "decade"]   # low-cardinality: also get a target multi-hot
-# Fixed vocab widths so FEATURE_COLS (features.py) is a static list that never
-# depends on running the gsimonx37 join first -- unused ids simply stay all-zero.
-GENRE_VOCAB_K = 30
-DECADE_VOCAB_K = 20
-TOP_ACTORS_PER_FILM = 3
+FACETS = ["genre", "theme", "language", "director", "actor"]
+# The 19 gsimonx37 genre names -- fixed and canonical (not frequency-ranked
+# like the old top-k vocab), because the whole vocabulary is known and small.
+# "__other__" catches strings from a project's own-genre fallback that don't
+# match any of the 19 (see build_movie_facets's own_genre argument).
+CANONICAL_GENRES = ["Action", "Adventure", "Animation", "Comedy", "Crime",
+                    "Documentary", "Drama", "Family", "Fantasy", "History",
+                    "Horror", "Music", "Mystery", "Romance", "Science Fiction",
+                    "TV Movie", "Thriller", "War", "Western"]
+GENRE_VOCAB_K = len(CANONICAL_GENRES)   # 19 named + 1 "__other__" = 20 slots
+TOP_ACTORS_PER_FILM = 20
+THEME_EMBED_MODEL = "all-MiniLM-L6-v2"
 
 
 def _norm_title(title: object) -> str:
@@ -63,40 +78,37 @@ class Gsimonx37:
     genre: dict                    # gs_id -> list[str]
     theme: dict
     language: dict
-    country: dict
-    studio: dict
     director: dict
     actor: dict
     runtime: dict                  # gs_id -> float minutes
     rating: dict                   # gs_id -> float (gsimonx37's own site-average rating)
     n_themes: dict
     n_languages: dict
-    n_countries: dict
 
 
 def load_gsimonx37() -> Gsimonx37:
     """Load and index the raw gsimonx37 CSVs (data/letterboxd/raw/gsimonx37/).
-    Excludes the (unused, undownloaded) posters file."""
+    Excludes studios/countries (dropped facets) and the (unused, undownloaded)
+    posters file."""
     movies = pd.read_csv(GSIMONX37_DIR / "movies.csv",
                          usecols=["id", "name", "date", "minute", "rating"])
     genres = pd.read_csv(GSIMONX37_DIR / "genres.csv")
     themes = pd.read_csv(GSIMONX37_DIR / "themes.csv")
-    studios = pd.read_csv(GSIMONX37_DIR / "studios.csv")
     actors = pd.read_csv(GSIMONX37_DIR / "actors.csv", usecols=["id", "name"])
     crew = pd.read_csv(GSIMONX37_DIR / "crew.csv", usecols=["id", "role", "name"])
-    countries = pd.read_csv(GSIMONX37_DIR / "countries.csv")
     languages = pd.read_csv(GSIMONX37_DIR / "languages.csv")
 
     def group_list(df, key, col):
-        return df.groupby(key)[col].apply(list).to_dict()
+        # .agg(list) dispatches through SeriesGroupBy.aggregate rather than
+        # the generic (much slower, per-group-callable) .apply path -- same
+        # result, ~5x faster with ~800k groups (the dominant cost of a cold
+        # cache; the join itself is cheap by comparison).
+        return df.groupby(key)[col].agg(list).to_dict()
 
     genre_by_id = group_list(genres, "id", "genre")
     theme_by_id = group_list(themes, "id", "theme")
-    studio_by_id = group_list(studios, "id", "studio")
     director_by_id = group_list(crew[crew["role"] == "Director"], "id", "name")
-    actor_by_id = (actors.groupby("id")["name"]
-                   .apply(lambda s: list(s)[:TOP_ACTORS_PER_FILM]).to_dict())
-    country_by_id = group_list(countries, "id", "country")
+    actor_by_id = {k: v[:TOP_ACTORS_PER_FILM] for k, v in group_list(actors, "id", "name").items()}
     language_by_id = group_list(languages[languages["type"] == "Language"], "id", "language")
 
     movies["norm_title"] = movies["name"].map(_norm_title)
@@ -113,11 +125,19 @@ def load_gsimonx37() -> Gsimonx37:
     rating = movies.set_index("id")["rating"].astype(float).to_dict()
     n_themes = {k: len(v) for k, v in theme_by_id.items()}
     n_languages = {k: len(v) for k, v in language_by_id.items()}
-    n_countries = {k: len(v) for k, v in country_by_id.items()}
 
     return Gsimonx37(by_title_year, by_title, genre_by_id, theme_by_id,
-                     language_by_id, country_by_id, studio_by_id, director_by_id,
-                     actor_by_id, runtime, rating, n_themes, n_languages, n_countries)
+                     language_by_id, director_by_id, actor_by_id, runtime, rating,
+                     n_themes, n_languages)
+
+
+def _canonical_genre_vocab() -> dict:
+    """The full known gsimonx37 genre vocabulary (19 names, sorted) plus one
+    "__other__" slot -- fixed and data-independent, unlike a frequency-ranked
+    top-k vocab, because the whole genre vocabulary is small and known."""
+    vocab = {g: i for i, g in enumerate(sorted(CANONICAL_GENRES))}
+    vocab["__other__"] = len(vocab)
+    return vocab
 
 
 def _top_k_vocab(facet_lists: list, k: int) -> dict:
@@ -125,7 +145,9 @@ def _top_k_vocab(facet_lists: list, k: int) -> dict:
     fixed "__other__" id = k, so the vocab (and therefore the multi-hot width)
     is always exactly k+1 regardless of how many distinct values actually
     occur -- ids beyond the real count simply never fire, which keeps
-    FEATURE_COLS a static list independent of the data snapshot."""
+    FEATURE_COLS a static list independent of the data snapshot. Used for
+    the app-catalog similarity vocabs, not genre (which has its own fixed
+    canonical vocab, see `_canonical_genre_vocab`)."""
     counts: dict = {}
     for values in facet_lists:
         for v in values:
@@ -138,20 +160,17 @@ def _top_k_vocab(facet_lists: list, k: int) -> dict:
 
 @dataclass
 class MovieFacets:
-    """Per-movie facet id sets (for affinity overlap) and multi-hot ids (for
-    genre/decade), plus the numeric tail. Indexed by this project's own
-    `movie_id`. Facets absent from the source or unmatched to gsimonx37 are
-    empty sets / NaN numerics -- never missing keys."""
+    """Per-movie facet id sets (for affinity overlap) and genre multi-hot ids,
+    plus the numeric tail. Indexed by this project's own `movie_id`. Facets
+    absent from the source or unmatched to gsimonx37 are empty sets / NaN
+    numerics -- never missing keys."""
     facet_sets: dict                 # movie_id -> {facet: frozenset[str]}
-    genre_multihot: dict              # movie_id -> list[int] ids (own genre vocab)
-    decade_multihot: dict             # movie_id -> [int] single-element decade id
+    genre_multihot: dict              # movie_id -> list[int] ids (canonical genre vocab)
     genre_vocab: dict
-    decade_vocab: dict
     runtime_log: dict                # movie_id -> float
     gs_rating: dict                  # movie_id -> float
     n_themes: dict
     n_languages: dict
-    n_countries: dict
     match_rate: float
 
 
@@ -163,10 +182,10 @@ def build_movie_facets(movies: pd.DataFrame, own_genre: dict | None = None) -> M
     possible)."""
     gs = load_gsimonx37()
     matched = 0
-    facet_sets, genre_mh, decade_mh = {}, {}, {}
+    facet_sets, genre_mh = {}, {}
     runtime_log, gs_rating = {}, {}
-    n_themes, n_languages, n_countries = {}, {}, {}
-    genre_lists, decade_lists = [], []
+    n_themes, n_languages = {}, {}
+    genre_lists = []
 
     resolved = {}
     for row in movies.itertuples(index=False):
@@ -189,36 +208,26 @@ def build_movie_facets(movies: pd.DataFrame, own_genre: dict | None = None) -> M
                 genre = fallback
             elif fallback:
                 genre = [fallback]
-        year = int(row.year) if pd.notna(getattr(row, "year", None)) else None
-        decade = [str((year // 10) * 10)] if year is not None else ["__unknown__"]
         facet_sets[mid] = {
             "genre": frozenset(genre),
-            "decade": frozenset(decade),
             "theme": frozenset(gs.theme.get(gs_id, [])) if gs_id is not None else frozenset(),
             "language": frozenset(gs.language.get(gs_id, [])) if gs_id is not None else frozenset(),
-            "country": frozenset(gs.country.get(gs_id, [])) if gs_id is not None else frozenset(),
-            "studio": frozenset(gs.studio.get(gs_id, [])) if gs_id is not None else frozenset(),
             "director": frozenset(gs.director.get(gs_id, [])) if gs_id is not None else frozenset(),
             "actor": frozenset(gs.actor.get(gs_id, [])) if gs_id is not None else frozenset(),
         }
         genre_lists.append(genre)
-        decade_lists.append(decade)
         runtime_log[mid] = float(np.log1p(gs.runtime.get(gs_id, np.nan))) if gs_id is not None else np.nan
         gs_rating[mid] = gs.rating.get(gs_id, np.nan) if gs_id is not None else np.nan
         n_themes[mid] = gs.n_themes.get(gs_id, 0) if gs_id is not None else 0
         n_languages[mid] = gs.n_languages.get(gs_id, 0) if gs_id is not None else 0
-        n_countries[mid] = gs.n_countries.get(gs_id, 0) if gs_id is not None else 0
 
-    genre_vocab = _top_k_vocab(genre_lists, k=GENRE_VOCAB_K)
-    decade_vocab = _top_k_vocab(decade_lists, k=DECADE_VOCAB_K)
+    genre_vocab = _canonical_genre_vocab()
     for mid, genres in zip(movies["movie_id"], genre_lists):
         genre_mh[mid] = sorted({genre_vocab.get(g, genre_vocab["__other__"]) for g in genres})
-    for mid, decades in zip(movies["movie_id"], decade_lists):
-        decade_mh[mid] = sorted({decade_vocab.get(d, decade_vocab["__other__"]) for d in decades})
 
     match_rate = matched / max(len(movies), 1)
-    return MovieFacets(facet_sets, genre_mh, decade_mh, genre_vocab, decade_vocab,
-                       runtime_log, gs_rating, n_themes, n_languages, n_countries, match_rate)
+    return MovieFacets(facet_sets, genre_mh, genre_vocab,
+                       runtime_log, gs_rating, n_themes, n_languages, match_rate)
 
 
 def load_or_build_movie_facets(movies: pd.DataFrame, own_genre: dict | None = None,
@@ -237,28 +246,76 @@ def load_or_build_movie_facets(movies: pd.DataFrame, own_genre: dict | None = No
     return facets
 
 
+# ---- theme embeddings -------------------------------------------------------
+# The 109 gsimonx37 theme phrases are few enough to embed directly: encode
+# each with a sentence-transformer, L2-normalize, and cache the resulting
+# vocab + cosine similarity matrix. features.py's theme block uses this
+# matrix to recognize thematically-close films that share no facet string
+# (e.g. "Gothic and eerie haunting horror" vs. "Terrifying, haunted, and
+# supernatural horror", cosine ~0.79 -- see report.pdf for the full writeup).
+def load_all_themes() -> list[str]:
+    """The full known gsimonx37 theme vocabulary (109 distinct phrases),
+    independent of which films are in any project's catalog -- so the theme
+    embedding vocab is stable even if the catalog changes."""
+    themes = pd.read_csv(GSIMONX37_DIR / "themes.csv")
+    return sorted(themes["theme"].unique())
+
+
+@dataclass
+class ThemeSimilarity:
+    vocab: dict            # theme string -> id
+    matrix: np.ndarray      # [n_themes, n_themes] float32 cosine similarity
+
+
+def build_theme_similarity(theme_strings: list[str],
+                           model_name: str = THEME_EMBED_MODEL) -> ThemeSimilarity:
+    """Encode every distinct theme phrase once and return the id vocab plus
+    the dense cosine similarity matrix. Runs in seconds on CPU for ~109
+    themes; not called per-movie or per-episode."""
+    from sentence_transformers import SentenceTransformer
+
+    vocab = {t: i for i, t in enumerate(sorted(theme_strings))}
+    model = SentenceTransformer(model_name)
+    embeddings = model.encode(list(vocab), normalize_embeddings=True, show_progress_bar=False)
+    matrix = (embeddings @ embeddings.T).astype(np.float32)
+    return ThemeSimilarity(vocab, matrix)
+
+
+def load_or_build_theme_similarity(theme_strings: list[str], force: bool = False) -> ThemeSimilarity:
+    """Cache `build_theme_similarity` to disk (a tiny .npz -- ~109x109 floats
+    plus the vocab list). Delete the cache or pass `force=True` if the theme
+    vocabulary changes (it hasn't since the gsimonx37 dump was last updated)."""
+    if not force and THEME_SIM_CACHE.exists():
+        with np.load(THEME_SIM_CACHE, allow_pickle=False) as data:
+            vocab = {t: i for i, t in enumerate(data["themes"])}
+            return ThemeSimilarity(vocab, data["matrix"])
+    sim = build_theme_similarity(theme_strings)
+    THEME_SIM_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    themes_sorted = sorted(sim.vocab, key=lambda t: sim.vocab[t])
+    np.savez(THEME_SIM_CACHE, themes=np.array(themes_sorted), matrix=sim.matrix)
+    return sim
+
+
 # ---- "movies like this one" suggestions (K-means, app catalog only) --------
 # Offline, deterministic precomputation for the app's suggestion dropdown ("to
 # improve this prediction, rate one of these similar films"): cluster the
 # app's ~1,000-film catalog on content facets with K-means, then for each
 # film return its k_neighbors nearest neighbours within its own cluster.
 # Mirrors rotten_tomatoes/movie_features.py's top_similar exactly.
-_TOP_STUDIO_K = 30
 _TOP_DIRECTOR_K = 30
 _TOP_ACTOR_K = 30
 _TOP_THEME_K = 30
 _TOP_LANGUAGE_K = 15
-_TOP_COUNTRY_K = 15
 _SIMILARITY_FACETS = {
-    "studio": _TOP_STUDIO_K, "director": _TOP_DIRECTOR_K, "actor": _TOP_ACTOR_K,
-    "theme": _TOP_THEME_K, "language": _TOP_LANGUAGE_K, "country": _TOP_COUNTRY_K,
+    "director": _TOP_DIRECTOR_K, "actor": _TOP_ACTOR_K,
+    "theme": _TOP_THEME_K, "language": _TOP_LANGUAGE_K,
 }
 
 
 def _facet_vocab(movies_json: list[dict], facet: str, k: int) -> dict:
     """Catalog-scoped top-k vocabulary (by frequency) for one facet -- this is
-    intentionally a *different* vocab from the trained models' genre/decade
-    one (movie_features.GENRE_VOCAB_K etc): it only needs to distinguish
+    intentionally a *different* vocab from the trained models' genre one
+    (movie_features.GENRE_VOCAB_K etc): it only needs to distinguish
     similarity within this app catalog, not align with a model's columns."""
     counts: dict = {}
     for m in movies_json:
@@ -281,14 +338,15 @@ def top_similar(movies_json: list[dict], consensus: dict, k_neighbors: int = 20,
                 seed: int = SEED) -> list[list[int]]:
     """Content-based "movies like this one" neighbours, position-aligned to
     ``movies_json``. Builds one standardized feature vector per film --
-    genre/decade multi-hot (the trained models' fixed vocab, from
-    ``genreMh``/``decadeMh``), studio/director/actor/theme/language/country
-    multi-hots (a catalog-scoped top-k vocabulary per facet, so cast and crew
-    are explicitly part of the similarity, not just genre), and standardized
-    numerics (runtime, the gsimonx37 site rating, facet counts, release year,
-    and ``consensus`` -- the one signal not already in ``movies_json``:
-    Tomatometer-mapped score for Rotten Tomatoes, mean member rating for
-    Letterboxd, keyed by movie id).
+    genre multi-hot (the trained models' fixed canonical vocab, from
+    ``genreMh``), director/actor/theme/language multi-hots (a catalog-scoped
+    top-k vocabulary per facet, so cast and crew are explicitly part of the
+    similarity, not just genre), and standardized numerics (runtime, the
+    gsimonx37 site rating, facet counts, release year, and ``consensus`` --
+    the one signal not already in ``movies_json``: Tomatometer-mapped score
+    for Rotten Tomatoes, mean member rating for Letterboxd, keyed by movie
+    id). Decade/country/studio dropped along with the feature contract (see
+    module docstring); ``year`` already carries decade-scale information.
 
     Clusters with K-means (``k = max(2, n // 25)`` clusters, ~25 films each)
     and returns each film's ``k_neighbors`` nearest neighbours (Euclidean, on
@@ -299,14 +357,11 @@ def top_similar(movies_json: list[dict], consensus: dict, k_neighbors: int = 20,
     n = len(movies_json)
     vocabs = {f: _facet_vocab(movies_json, f, k) for f, k in _SIMILARITY_FACETS.items()}
     genre_width = GENRE_VOCAB_K + 1
-    decade_width = DECADE_VOCAB_K + 1
     genre_ids = {i: i for i in range(genre_width)}
-    decade_ids = {i: i for i in range(decade_width)}
 
     rows = []
     for m in movies_json:
         genre_row = _multihot(m["genreMh"], genre_ids, genre_width)
-        decade_row = _multihot(m["decadeMh"], decade_ids, decade_width)
         facet_rows = [_multihot(m["facets"].get(f, []), vocabs[f], k)
                      for f, k in _SIMILARITY_FACETS.items()]
         numeric = np.array([
@@ -314,20 +369,19 @@ def top_similar(movies_json: list[dict], consensus: dict, k_neighbors: int = 20,
             m.get("gsRating") or 0.0,
             m.get("nThemesLog") or 0.0,
             m.get("nLanguagesLog") or 0.0,
-            m.get("nCountriesLog") or 0.0,
             float(m.get("year") or 0),
             float(consensus.get(m["id"]) or 0.0),
         ], dtype=np.float64)
-        rows.append(np.concatenate([genre_row, decade_row, *facet_rows, numeric]))
+        rows.append(np.concatenate([genre_row, *facet_rows, numeric]))
 
-    data = np.vstack(rows)
-    mu = data.mean(axis=0)
-    sd = data.std(axis=0)
-    sd[sd < 1e-9] = 1.0
-    data = (data - mu) / sd
+    # scikit-learn does both steps: StandardScaler centres/scales each column
+    # (constant columns are left alone, as the old manual guard did), and
+    # KMeans clusters with k-means++ init.
+    data = StandardScaler().fit_transform(np.vstack(rows))
 
     k = max(2, min(n - 1, n // 25)) if n > 2 else 1
-    _, labels = kmeans2(data, k, seed=seed, minit="++")
+    labels = KMeans(n_clusters=k, init="k-means++", n_init=10,
+                    random_state=seed).fit_predict(data)
 
     clusters: dict[int, list[int]] = {}
     for i, lab in enumerate(labels):

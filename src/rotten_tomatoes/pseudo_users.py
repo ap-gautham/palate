@@ -2,12 +2,11 @@
 similarity, held-out-episode sampling, and the deterministic paired/nested
 test protocol.
 
-This file is intentionally SELF-CONTAINED and duplicated verbatim inside each
-design folder (design1_analytic, design2_xgboost, design3_neural) so that every
-design reads top-to-bottom without importing another design. The three copies
-are identical, so the seeded episode generator produces byte-identical
-(user, target, n, draw) test episodes across designs, which is what makes the
-cross-design comparison in ``comparison/analysis.py`` valid. Only the shared
+This file lives once at the package root and is imported by all three design
+trainers (``train_analytic.py``, ``train_xgboost.py``, ``train_neural.py``), so
+the seeded episode generator produces byte-identical (user, target, n, draw)
+test episodes across designs -- which is what makes the cross-design comparison
+in ``analyze.py`` valid. Only the shared
 constants in ``config.py`` (paths, seeds, the evaluation grid) are imported.
 """
 from dataclasses import dataclass, field
@@ -38,6 +37,8 @@ class Split:
     dispersion: np.ndarray | None = None  # per target movie: std of pool values
     n_reviewers: np.ndarray | None = None
     global_mean: float = 0.0        # all-time grand mean (B1)
+    global_std: float = 0.0         # all-time grand std -- sigma_u fallback when a
+                                     # user's own seen-set std is ~0 (see features.py)
     critic_mean: np.ndarray | None = None  # per pool critic all-time mean
     critic_sum: np.ndarray | None = None
     critic_count: np.ndarray | None = None
@@ -110,6 +111,7 @@ def build_split(scored: pd.DataFrame, movies: pd.DataFrame,
     popularity = np.asarray(sp.Hmask.sum(axis=0)).ravel()
     sp.pop_weight = {col: int(count) for col, count in enumerate(popularity)}
     sp.global_mean = float(ratings[value_col].mean())
+    sp.global_std = float(ratings[value_col].std(ddof=0))
 
     critic_sums = np.asarray(sp.H.sum(axis=1)).ravel()
     critic_counts = np.asarray(sp.Hmask.sum(axis=1)).ravel()
@@ -233,6 +235,45 @@ def target_ok_mask(sp: Split, upos: int) -> np.ndarray:
     return (sp.n_reviewers - own) >= MIN_OTHER_REVIEWERS
 
 
+def iter_paired_episodes_for_user(sp: Split, upos: int, seed: int,
+                                  n_targets: int = EVAL_TARGETS_PER_USER,
+                                  n_draws: int = EVAL_DRAWS):
+    """`iter_paired_episodes`'s body for a single pseudo-user. Factored out so
+    the per-user work can be split across processes (see `generate_paired_rows`
+    in features.py): each user gets its own independent RNG stream, seeded from
+    ``(seed, upos)`` rather than by consuming a single stream in iteration
+    order, so the result is identical regardless of how users are chunked or
+    in what order they're processed."""
+    rng = np.random.default_rng([seed, upos])
+    cols, vals = sp.user_hist[upos]
+    if len(cols) <= N_MAX_FINITE:            # cannot support the whole grid
+        return
+    ok = target_ok_mask(sp, upos)
+    eligible_local = np.flatnonzero(ok[cols])
+    if len(eligible_local) == 0:
+        return
+    chosen = rng.choice(eligible_local,
+                        size=min(n_targets, len(eligible_local)),
+                        replace=False)
+    for t_local in chosen:
+        target_col = int(cols[t_local])
+        target_value = float(vals[t_local])
+        keep = np.ones(len(cols), dtype=bool)
+        keep[t_local] = False
+        rem_cols, rem_vals = cols[keep], vals[keep]
+        weights = np.array([sp.pop_weight.get(int(c), 1) for c in rem_cols],
+                           dtype=float)
+        probs = weights / weights.sum()
+        for draw in range(n_draws):
+            order = rng.choice(len(rem_cols), size=len(rem_cols),
+                               replace=False, p=probs)
+            for n in N_GRID:
+                seen = order if n is None else order[:n]
+                yield (upos, target_col, target_value,
+                       -1 if n is None else n, draw,
+                       rem_cols[seen], rem_vals[seen])
+
+
 def iter_paired_episodes(sp: Split, users, seed: int = SEED,
                          n_targets: int = EVAL_TARGETS_PER_USER,
                          n_draws: int = EVAL_DRAWS):
@@ -246,37 +287,14 @@ def iter_paired_episodes(sp: Split, users, seed: int = SEED,
     every seen-count -- and every baseline -- is scored on an identical
     (user, target, draw) set, removing the target-sampling wobble.
 
+    Each user draws from its own independent RNG stream (see
+    `iter_paired_episodes_for_user`), so users can be processed in any order --
+    or split across worker processes -- with an identical result.
+
     Yields ``(upos, target_col, target_value, n, draw, seen_cols, seen_values)``.
     """
-    rng = np.random.default_rng(seed)
     for upos in sorted(int(u) for u in users):
-        cols, vals = sp.user_hist[upos]
-        if len(cols) <= N_MAX_FINITE:            # cannot support the whole grid
-            continue
-        ok = target_ok_mask(sp, upos)
-        eligible_local = np.flatnonzero(ok[cols])
-        if len(eligible_local) == 0:
-            continue
-        chosen = rng.choice(eligible_local,
-                            size=min(n_targets, len(eligible_local)),
-                            replace=False)
-        for t_local in chosen:
-            target_col = int(cols[t_local])
-            target_value = float(vals[t_local])
-            keep = np.ones(len(cols), dtype=bool)
-            keep[t_local] = False
-            rem_cols, rem_vals = cols[keep], vals[keep]
-            weights = np.array([sp.pop_weight.get(int(c), 1) for c in rem_cols],
-                               dtype=float)
-            probs = weights / weights.sum()
-            for draw in range(n_draws):
-                order = rng.choice(len(rem_cols), size=len(rem_cols),
-                                   replace=False, p=probs)
-                for n in N_GRID:
-                    seen = order if n is None else order[:n]
-                    yield (upos, target_col, target_value,
-                           -1 if n is None else n, draw,
-                           rem_cols[seen], rem_vals[seen])
+        yield from iter_paired_episodes_for_user(sp, upos, seed, n_targets, n_draws)
 
 
 def partition_pseudo_users(sp: Split, seed: int = SEED,

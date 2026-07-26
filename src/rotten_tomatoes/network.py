@@ -1,8 +1,8 @@
-"""Design 3 architecture: a residual tabular MLP with a genre embedding.
-
-The 37 numeric features (standardized) are concatenated with a learned genre
-embedding, projected to a hidden width, passed through pre-activation residual
-blocks, and read out by a linear head.
+"""Design 3 architecture: a residual tabular MLP over the full feature
+contract. No genre embedding: the per-genre affinity block (features.py)
+already gives the model per-genre information directly, richer than a single
+first-genre id could (`genre_id` was dropped from the feature contract for the
+same reason).
 """
 import torch
 from torch import nn
@@ -22,17 +22,15 @@ class ResBlock(nn.Module):
 
 
 class TabularResNet(nn.Module):
-    def __init__(self, n_numeric: int, n_genres: int, emb_dim: int,
-                 width: int, depth: int, dropout: float):
+    def __init__(self, n_numeric: int, width: int, depth: int, dropout: float):
         super().__init__()
         self.input_norm = nn.BatchNorm1d(n_numeric)
-        self.embedding = nn.Embedding(n_genres, emb_dim)
-        self.proj = nn.Linear(n_numeric + emb_dim, width)
+        self.proj = nn.Linear(n_numeric, width)
         self.blocks = nn.ModuleList([ResBlock(width, dropout) for _ in range(depth)])
         self.head = nn.Sequential(nn.LayerNorm(width), nn.Linear(width, 1))
 
-    def forward(self, numeric, genre):
-        x = torch.cat([self.input_norm(numeric), self.embedding(genre)], dim=1)
+    def forward(self, numeric):
+        x = self.input_norm(numeric)
         h = self.proj(x)
         for block in self.blocks:
             h = block(h)

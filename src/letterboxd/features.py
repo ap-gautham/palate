@@ -3,112 +3,259 @@
 Per (member profile, target film) episode the learned models see a fixed-width
 row: the target's raters sorted by member similarity and summarised in ten
 deciles of ``similarity x (rater score - that rater's leave-one-out all-time
-mean)``, plus a tail of seen count, overlap statistics, rater count, dispersion,
-genre, and the member's mean rating -- and, beyond that, a rich movie-facet
-tail (see "rich movie-facet contract" below) built from the gsimonx37/
-letterboxd metadata join (`movie_features.py`): per-facet user affinity (does
-this member's seen history over- or under-rate films sharing this genre/
-theme/studio/director/actor/decade/language/country with the target?) plus a
-genre/decade multi-hot and a small numeric tail (runtime, external rating,
-facet counts). This is the RT contract **without the Tomatometer feature**
-(Letterboxd has no critic-consensus meter), on the 1-10 member scale.
+mean)``, plus a tail of seen count, overlap statistics, rater count,
+dispersion, genre, and the member's mean rating -- and, beyond that, real
+content-based affinity features built from the gsimonx37 movie-facet join
+(`movie_features.py`): per-genre z-scored affinity, a theme-embedding
+similarity-weighted rating estimate, per-actor affinity (by rating and by
+count) plus cast-overlap statistics, and per-director affinity. This is the RT
+contract **without the Tomatometer feature** (Letterboxd has no
+critic-consensus meter), on the 1-10 member scale. See report.pdf's
+feature-engineering section for the full column-by-column writeup.
 
 Self-contained: this module never imports Rotten Tomatoes code (the gsimonx37
-join is duplicated, not shared, in `rotten_tomatoes/movie_features.py`). It
-offers a sparse-matrix path (``build_data`` + ``similarity`` +
-``episode_feature_row`` + row generators) used for training and analysis, and
-a DataFrame app-path (``app_similarity`` + ``app_features``) used by and
-mirrored in the browser TypeScript port.
+join is duplicated, not shared, in `rotten_tomatoes/movie_features.py`). The
+member-by-film matrix, similarity and episode protocol it builds on live in
+``pseudo_users.py``, mirroring the Rotten Tomatoes split. On top of them it
+offers an offline path (``episode_feature_row`` + row generators) used for
+training and analysis, and a DataFrame app-path (``app_similarity`` +
+``app_features``) used by and mirrored in the browser TypeScript port.
 """
 from __future__ import annotations
 
 import json
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from scipy import sparse
 
 from . import movie_features as MF
 from .config import RATING_MIN, RATING_MAX, SEED
+# The substrate this contract is built on (same split as RT's features.py /
+# pseudo_users.py). Re-exported here so callers can keep reaching them through
+# ``features`` as well as importing ``pseudo_users`` directly.
+from .pseudo_users import (K_SHRINK, LBData, MIN_APP_OVERLAP, build_data,
+                           eligible_members, iter_paired_episodes,
+                           iter_paired_episodes_for_member, make_genre_maps,
+                           partition_members, rmse, similarity)
 
 MIN_OTHER_REVIEWERS = 3        # a target film needs this many OTHER raters
-MIN_APP_OVERLAP = 2            # min shared films before a member similarity counts
-K_SHRINK = 8                   # overlap shrinkage, same constant as RT
 DECILES = 10
 
 MAIN_COLS = ([f"d{i}_mean" for i in range(DECILES)]
              + [f"d{i}_cnt" for i in range(DECILES)]
              + [f"d{i}_std" for i in range(DECILES)])
 
-# ---- rich movie-facet contract (see module docstring) ----------------------
-FACET_DEV_COLS = [f"user_{f}_dev" for f in MF.FACETS]
-FACET_CNT_COLS = [f"user_{f}_cnt" for f in MF.FACETS]
-GENRE_MH_COLS = [f"mh_genre_{i}" for i in range(MF.GENRE_VOCAB_K + 1)]
-DECADE_MH_COLS = [f"mh_decade_{i}" for i in range(MF.DECADE_VOCAB_K + 1)]
-NUMERIC_TAIL_COLS = ["runtime_log", "gs_rating", "n_themes_log", "n_languages_log",
-                     "n_countries_log"]
-FACET_TAIL_COLS = FACET_DEV_COLS + FACET_CNT_COLS + GENRE_MH_COLS + DECADE_MH_COLS + NUMERIC_TAIL_COLS
+# ---- content-based affinity contract (see module docstring) ----------------
+# Genre: one z-score + one log1p(count) per canonical genre slot (20 =
+# GENRE_VOCAB_K + "__other__"). The count INCLUDES the target film itself, so
+# it doubles as the old multi-hot: cnt==0 -> target isn't this genre, cnt==1
+# -> target is this genre and the user has seen none, cnt==n+1 -> n seen. The
+# z-score only ever averages over seen films (never the target), so this adds
+# no leakage.
+GENRE_WIDTH = MF.GENRE_VOCAB_K + 1
+GENRE_Z_COLS = [f"user_genre_{g}_z" for g in range(GENRE_WIDTH)]
+GENRE_CNT_COLS = [f"user_genre_{g}_cnt" for g in range(GENRE_WIDTH)]
+
+# Theme: a similarity-weighted average RAW rating (not a deviation -- see
+# report.pdf) over every (target theme, seen film) pair, weighted by the
+# sentence-embedding cosine similarity between the target theme and the seen
+# film's most-similar theme; plus the total similarity mass (the confidence
+# companion, and the exact mask for the average -- 0 iff the average is NaN)
+# and a count of strongly on-theme (>0.8 cosine) seen films.
+THEME_COLS = ["user_theme_avg", "user_theme_mass_log", "user_theme_simcnt_hi"]
+
+# Actor: three top-5 rankings of the target's cast against the user's seen
+# history -- by the user's mean rating for that actor, by the user's viewing
+# count for that actor, and seen films ranked by shared-cast count with the
+# target. Unused ranks are padded (z/rating -> NaN, count -> 0).
+ACTOR_BYRATING_Z_COLS = [f"user_actor_byrating{i}_z" for i in range(1, 6)]
+ACTOR_BYRATING_CNT_COLS = [f"user_actor_byrating{i}_cnt" for i in range(1, 6)]
+ACTOR_BYCOUNT_Z_COLS = [f"user_actor_bycount{i}_z" for i in range(1, 6)]
+ACTOR_BYCOUNT_CNT_COLS = [f"user_actor_bycount{i}_cnt" for i in range(1, 6)]
+CAST_OVERLAP_N_COLS = [f"user_cast_overlap{i}_n" for i in range(1, 6)]
+CAST_OVERLAP_RATING_COLS = [f"user_cast_overlap{i}_rating" for i in range(1, 6)]
+
+# Director: one z-score + one log1p(count) over seen films sharing any
+# director with the target.
+DIRECTOR_COLS = ["user_director_z", "user_director_cnt"]
+
+NUMERIC_TAIL_COLS = ["runtime_log", "gs_rating", "n_themes_log", "n_languages_log"]
+
+FACET_TAIL_COLS = (GENRE_Z_COLS + GENRE_CNT_COLS + THEME_COLS
+                   + ACTOR_BYRATING_Z_COLS + ACTOR_BYRATING_CNT_COLS
+                   + ACTOR_BYCOUNT_Z_COLS + ACTOR_BYCOUNT_CNT_COLS
+                   + CAST_OVERLAP_N_COLS + CAST_OVERLAP_RATING_COLS
+                   + DIRECTOR_COLS + NUMERIC_TAIL_COLS)
 
 TAIL_COLS = (["n_observed", "mean_overlap", "max_overlap", "n_reviewers",
-              "dispersion", "genre_id", "user_mean"] + FACET_TAIL_COLS)
+              "dispersion", "user_mean"] + FACET_TAIL_COLS)
 FEATURE_COLS = MAIN_COLS + TAIL_COLS
 _EMPTY_FACET_SETS = {f: frozenset() for f in MF.FACETS}
 
 
-def _facet_tail(target_facets: dict, target_genre_ids: list, target_decade_ids: list,
+# ---- per-block affinity computation (identical logic to RT) ----------------
+def _genre_block(target_genre_ids: frozenset, seen_genre_ids_list: list,
+                 seen_values: np.ndarray, mu_u: float, sigma_u: float) -> dict:
+    """One pass over the (typically 1-3-genre) seen sets, bucketing each seen
+    film's rating into every genre slot it belongs to, rather than rescanning
+    the whole seen list once per of the 20 genre slots (the original approach
+    -- ~20x more scanning for the same result)."""
+    sums = np.zeros(GENRE_WIDTH)
+    counts = np.zeros(GENRE_WIDTH, dtype=np.int64)
+    for gset, value in zip(seen_genre_ids_list, seen_values):
+        for g in gset:
+            sums[g] += value
+            counts[g] += 1
+    out = {}
+    for g in range(GENRE_WIDTH):
+        cnt = int(counts[g]) + (1 if g in target_genre_ids else 0)
+        out[f"user_genre_{g}_z"] = (sums[g] / counts[g] - mu_u) / sigma_u if counts[g] else np.nan
+        out[f"user_genre_{g}_cnt"] = float(np.log1p(cnt))
+    return out
+
+
+def _theme_block(target_theme_ids: frozenset, seen_theme_ids_list: list,
+                 seen_values: np.ndarray, theme_matrix: np.ndarray) -> dict:
+    """Similarity-weighted average rating over (target theme, seen film)
+    pairs. Per target theme t and seen film f with theme ids T_f:
+    w(t,f) = max_{u in T_f} cos(e_t, e_u); the combined average collapses to
+    Σ_{t,f} w(t,f)·rating(f) / Σ_{t,f} w(t,f) (see report.pdf for the algebra
+    showing this is exactly the mass-weighted combination of each theme's own
+    weighted average). Identical logic to rotten_tomatoes/features.py."""
+    if not target_theme_ids:
+        return {"user_theme_avg": np.nan, "user_theme_mass_log": 0.0,
+                "user_theme_simcnt_hi": 0.0}
+    S = np.fromiter(target_theme_ids, dtype=np.int64)
+    target_rows = theme_matrix[S]  # gather the target-theme rows once, not per film
+    total_num, total_den, hi_count = 0.0, 0.0, 0
+    for tset, rating in zip(seen_theme_ids_list, seen_values):
+        if not tset:
+            continue
+        Tf = np.fromiter(tset, dtype=np.int64)
+        w = np.clip(target_rows[:, Tf].max(axis=1), 0.0, 1.0)
+        w_sum = float(w.sum())
+        if w_sum <= 0:
+            continue
+        total_num += w_sum * float(rating)
+        total_den += w_sum
+        if float(w.max()) > 0.8:
+            hi_count += 1
+    avg = total_num / total_den if total_den > 0 else np.nan
+    return {"user_theme_avg": avg, "user_theme_mass_log": float(np.log1p(total_den)),
+            "user_theme_simcnt_hi": float(np.log1p(hi_count))}
+
+
+def _actor_block(target_cast: frozenset, seen_cast_list: list,
+                 seen_values: np.ndarray, mu_u: float, sigma_u: float) -> dict:
+    actor_ratings: dict = {}
+    for cast, rating in zip(seen_cast_list, seen_values):
+        if not cast:
+            continue
+        for a in (cast & target_cast):
+            actor_ratings.setdefault(a, []).append(float(rating))
+    entries = [(a, float(np.mean(rs)), len(rs)) for a, rs in actor_ratings.items()]
+    by_rating = sorted(entries, key=lambda e: (-e[1], -e[2]))[:5]
+    by_count = sorted(entries, key=lambda e: (-e[2], -e[1]))[:5]
+
+    out = {}
+    for i in range(5):
+        z_col, cnt_col = ACTOR_BYRATING_Z_COLS[i], ACTOR_BYRATING_CNT_COLS[i]
+        if i < len(by_rating):
+            _, avg, cnt = by_rating[i]
+            out[z_col] = (avg - mu_u) / sigma_u
+            out[cnt_col] = float(np.log1p(cnt))
+        else:
+            out[z_col] = np.nan
+            out[cnt_col] = 0.0
+    for i in range(5):
+        z_col, cnt_col = ACTOR_BYCOUNT_Z_COLS[i], ACTOR_BYCOUNT_CNT_COLS[i]
+        if i < len(by_count):
+            _, avg, cnt = by_count[i]
+            out[z_col] = (avg - mu_u) / sigma_u
+            out[cnt_col] = float(np.log1p(cnt))
+        else:
+            out[z_col] = np.nan
+            out[cnt_col] = 0.0
+
+    overlaps = []
+    for cast, rating in zip(seen_cast_list, seen_values):
+        if not cast:
+            continue
+        n = len(cast & target_cast)
+        if n > 0:
+            overlaps.append((n, float(rating)))
+    overlaps.sort(key=lambda e: -e[0])
+    for i in range(5):
+        n_col, rating_col = CAST_OVERLAP_N_COLS[i], CAST_OVERLAP_RATING_COLS[i]
+        if i < len(overlaps):
+            n, rating = overlaps[i]
+            out[n_col] = float(np.log1p(n))
+            out[rating_col] = rating
+        else:
+            out[n_col] = 0.0
+            out[rating_col] = np.nan
+    return out
+
+
+def _director_block(target_directors: frozenset, seen_director_list: list,
+                    seen_values: np.ndarray, mu_u: float, sigma_u: float) -> dict:
+    hits = [float(r) for d, r in zip(seen_director_list, seen_values) if d and (d & target_directors)]
+    if hits:
+        return {"user_director_z": (float(np.mean(hits)) - mu_u) / sigma_u,
+                "user_director_cnt": float(np.log1p(len(hits)))}
+    return {"user_director_z": np.nan, "user_director_cnt": 0.0}
+
+
+def _facet_tail(target_genre_ids: frozenset, target_theme_ids: frozenset,
+                target_actor_set: frozenset, target_director_set: frozenset,
                 target_runtime_log: float, target_gs_rating: float,
                 target_n_themes: float, target_n_languages: float,
-                target_n_countries: float, seen_facets_list: list,
-                seen_devs: np.ndarray) -> dict:
-    """Core facet-tail computation, agnostic to whether the caller resolved
-    facets by sparse-matrix position (offline) or by movie_id (app-time). For
-    each facet, the user-affinity pair is the mean deviation (and log1p count)
-    over the *seen* films whose facet set intersects the target's -- built
-    leave-the-target-out by construction, since only seen films are examined.
-    Identical logic to `rotten_tomatoes/features.py`'s `_facet_tail`."""
+                seen_genre_ids_list: list, seen_theme_ids_list: list,
+                seen_actor_list: list, seen_director_list: list,
+                seen_values: np.ndarray, theme_matrix: np.ndarray,
+                global_std: float) -> dict:
+    """Core affinity-tail computation, agnostic to whether the caller resolved
+    facets by sparse-matrix position (offline) or by movie_id (app-time).
+    ``seen_values`` are RAW ratings on whichever scale the caller is working
+    in (the raw track's actual ratings, or the z-track's already-standardized
+    per-episode z-values) -- every block computes its own local mu_u/sigma_u
+    from this array and expresses its affinity relative to it, falling back
+    to ``global_std`` when the seen set has ~zero variance. Identical logic
+    to rotten_tomatoes/features.py's `_facet_tail`."""
+    mu_u = float(seen_values.mean()) if len(seen_values) else 0.0
+    sigma_u = float(seen_values.std(ddof=0)) if len(seen_values) else 0.0
+    if sigma_u < 1e-9:
+        sigma_u = global_std if global_std > 1e-9 else 1.0
+
     out = {}
-    for f in MF.FACETS:
-        tgt_set = target_facets.get(f) or frozenset()
-        if not tgt_set:
-            out[f"user_{f}_dev"] = 0.0
-            out[f"user_{f}_cnt"] = 0.0
-            continue
-        hits = [seen_devs[i] for i, sf in enumerate(seen_facets_list)
-               if sf.get(f) and (sf[f] & tgt_set)]
-        out[f"user_{f}_dev"] = float(np.mean(hits)) if hits else 0.0
-        out[f"user_{f}_cnt"] = float(np.log1p(len(hits)))
-
-    genre_vec = [0.0] * len(GENRE_MH_COLS)
-    for gid in target_genre_ids:
-        genre_vec[gid] = 1.0
-    out.update(zip(GENRE_MH_COLS, genre_vec))
-
-    decade_vec = [0.0] * len(DECADE_MH_COLS)
-    for did in target_decade_ids:
-        decade_vec[did] = 1.0
-    out.update(zip(DECADE_MH_COLS, decade_vec))
-
+    out.update(_genre_block(target_genre_ids, seen_genre_ids_list, seen_values, mu_u, sigma_u))
+    out.update(_theme_block(target_theme_ids, seen_theme_ids_list, seen_values, theme_matrix))
+    out.update(_actor_block(target_actor_set, seen_actor_list, seen_values, mu_u, sigma_u))
+    out.update(_director_block(target_director_set, seen_director_list, seen_values, mu_u, sigma_u))
     out["runtime_log"] = float(target_runtime_log) if np.isfinite(target_runtime_log) else 0.0
     out["gs_rating"] = float(target_gs_rating) if np.isfinite(target_gs_rating) else 0.0
     out["n_themes_log"] = float(np.log1p(target_n_themes))
     out["n_languages_log"] = float(np.log1p(target_n_languages))
-    out["n_countries_log"] = float(np.log1p(target_n_countries))
     return out
 
 
 @dataclass
 class FacetContext:
     """Movie facets, position-aligned to `LBData.movies` (so the sparse-matrix
-    episode builders can index by integer position)."""
-    facet_sets: list
-    genre_mh: list
-    decade_mh: list
+    episode builders can index by integer position). Genre/theme are resolved
+    to fixed-vocab ids once here; actor/director stay as raw-string sets."""
+    genre_ids: list           # position -> frozenset[int] canonical genre ids
+    theme_ids: list           # position -> frozenset[int] theme-vocab ids
+    actor_sets: list          # position -> frozenset[str]
+    director_sets: list       # position -> frozenset[str]
     runtime_log: np.ndarray
     gs_rating: np.ndarray
     n_themes: np.ndarray
     n_languages: np.ndarray
-    n_countries: np.ndarray
+    theme_matrix: np.ndarray
+    global_std: float
 
 
 def load_project_movie_facets(movies: pd.DataFrame):
@@ -133,14 +280,29 @@ def load_project_movie_facets(movies: pd.DataFrame):
     return MF.load_or_build_movie_facets(cat, own_genre=own_genre)
 
 
-def build_facet_context(movies: pd.DataFrame, movie_index: pd.Index) -> FacetContext:
+def load_project_theme_similarity():
+    """The theme embedding vocab + cosine similarity matrix (cached after the
+    first run) -- the full known gsimonx37 theme vocabulary, independent of
+    which films are in this project's catalog."""
+    return MF.load_or_build_theme_similarity(MF.load_all_themes())
+
+
+def _theme_ids_of(mf, theme_sim, mid) -> frozenset:
+    strs = mf.facet_sets.get(mid, _EMPTY_FACET_SETS)["theme"]
+    return frozenset(theme_sim.vocab[t] for t in strs if t in theme_sim.vocab)
+
+
+def build_facet_context(movies: pd.DataFrame, movie_index: pd.Index,
+                        global_std: float) -> FacetContext:
     """Join to gsimonx37 (cached after the first run) and re-index the result
     to the sparse matrix's movie positions."""
     mf = load_project_movie_facets(movies)
+    theme_sim = load_project_theme_similarity()
     ids = list(movie_index)
-    facet_sets = [mf.facet_sets.get(mid, _EMPTY_FACET_SETS) for mid in ids]
-    genre_mh = [mf.genre_multihot.get(mid, []) for mid in ids]
-    decade_mh = [mf.decade_multihot.get(mid, []) for mid in ids]
+    genre_ids = [frozenset(mf.genre_multihot.get(mid, [])) for mid in ids]
+    theme_ids = [_theme_ids_of(mf, theme_sim, mid) for mid in ids]
+    actor_sets = [mf.facet_sets.get(mid, _EMPTY_FACET_SETS)["actor"] for mid in ids]
+    director_sets = [mf.facet_sets.get(mid, _EMPTY_FACET_SETS)["director"] for mid in ids]
 
     def arr(d: dict, default: float) -> np.ndarray:
         a = np.array([d.get(mid, default) for mid in ids], dtype=np.float64)
@@ -151,36 +313,58 @@ def build_facet_context(movies: pd.DataFrame, movie_index: pd.Index) -> FacetCon
         return a
 
     return FacetContext(
-        facet_sets=facet_sets, genre_mh=genre_mh, decade_mh=decade_mh,
+        genre_ids=genre_ids, theme_ids=theme_ids, actor_sets=actor_sets,
+        director_sets=director_sets,
         runtime_log=arr(mf.runtime_log, np.nan),
         gs_rating=arr(mf.gs_rating, np.nan),
         n_themes=arr(mf.n_themes, 0.0),
         n_languages=arr(mf.n_languages, 0.0),
-        n_countries=arr(mf.n_countries, 0.0),
+        theme_matrix=theme_sim.matrix, global_std=global_std,
     )
 
 
 def facet_tail_from_context(fc: FacetContext, seen_cols: np.ndarray,
-                            seen_devs: np.ndarray, target_col: int) -> dict:
-    seen_facets_list = [fc.facet_sets[c] for c in seen_cols]
-    return _facet_tail(fc.facet_sets[target_col], fc.genre_mh[target_col],
-                       fc.decade_mh[target_col], fc.runtime_log[target_col],
-                       fc.gs_rating[target_col], fc.n_themes[target_col],
-                       fc.n_languages[target_col], fc.n_countries[target_col],
-                       seen_facets_list, seen_devs)
+                            seen_values: np.ndarray, target_col: int) -> dict:
+    """``seen_values`` must be RAW values on the caller's scale (not
+    deviations) -- see `_facet_tail`'s docstring."""
+    seen_genre_ids_list = [fc.genre_ids[c] for c in seen_cols]
+    seen_theme_ids_list = [fc.theme_ids[c] for c in seen_cols]
+    seen_actor_list = [fc.actor_sets[c] for c in seen_cols]
+    seen_director_list = [fc.director_sets[c] for c in seen_cols]
+    return _facet_tail(fc.genre_ids[target_col], fc.theme_ids[target_col],
+                       fc.actor_sets[target_col], fc.director_sets[target_col],
+                       fc.runtime_log[target_col], fc.gs_rating[target_col],
+                       fc.n_themes[target_col], fc.n_languages[target_col],
+                       seen_genre_ids_list, seen_theme_ids_list,
+                       seen_actor_list, seen_director_list,
+                       seen_values, fc.theme_matrix, fc.global_std)
 
 
-def facet_tail_from_ids(mf, seen_movie_ids, seen_devs: np.ndarray, target_movie_id) -> dict:
-    """App-time counterpart, keyed by movie_id (a `movie_features.MovieFacets`)."""
-    seen_facets_list = [mf.facet_sets.get(mid, _EMPTY_FACET_SETS) for mid in seen_movie_ids]
+def facet_tail_from_ids(mf, theme_sim, seen_movie_ids, seen_values: np.ndarray,
+                        target_movie_id, global_std: float) -> dict:
+    """App-time counterpart, keyed by movie_id (a `movie_features.MovieFacets`).
+    ``seen_values`` must be RAW ratings (not deviations)."""
+    def genre_ids_of(mid):
+        return frozenset(mf.genre_multihot.get(mid, []))
+
+    def actor_of(mid):
+        return mf.facet_sets.get(mid, _EMPTY_FACET_SETS)["actor"]
+
+    def director_of(mid):
+        return mf.facet_sets.get(mid, _EMPTY_FACET_SETS)["director"]
+
+    seen_genre_ids_list = [genre_ids_of(mid) for mid in seen_movie_ids]
+    seen_theme_ids_list = [_theme_ids_of(mf, theme_sim, mid) for mid in seen_movie_ids]
+    seen_actor_list = [actor_of(mid) for mid in seen_movie_ids]
+    seen_director_list = [director_of(mid) for mid in seen_movie_ids]
+
     return _facet_tail(
-        mf.facet_sets.get(target_movie_id, _EMPTY_FACET_SETS),
-        mf.genre_multihot.get(target_movie_id, []),
-        mf.decade_multihot.get(target_movie_id, []),
-        mf.runtime_log.get(target_movie_id, np.nan),
-        mf.gs_rating.get(target_movie_id, np.nan),
+        genre_ids_of(target_movie_id), _theme_ids_of(mf, theme_sim, target_movie_id),
+        actor_of(target_movie_id), director_of(target_movie_id),
+        mf.runtime_log.get(target_movie_id, np.nan), mf.gs_rating.get(target_movie_id, np.nan),
         mf.n_themes.get(target_movie_id, 0), mf.n_languages.get(target_movie_id, 0),
-        mf.n_countries.get(target_movie_id, 0), seen_facets_list, seen_devs)
+        seen_genre_ids_list, seen_theme_ids_list, seen_actor_list, seen_director_list,
+        seen_values, theme_sim.matrix, global_std)
 
 
 # ---- pure feature contract (identical logic to RT) ------------------------
@@ -206,139 +390,6 @@ def main_feature_row(similarities: np.ndarray, deviations: np.ndarray,
     if missing:
         raise ValueError(f"missing tail features: {missing}")
     return row
-
-
-# ---- genre map -------------------------------------------------------------
-def _first_genre(raw: object) -> str:
-    if not isinstance(raw, str) or not raw:
-        return ""
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list) and parsed:
-            return str(parsed[0]).strip()
-    except (json.JSONDecodeError, ValueError):
-        return raw.split(",")[0].strip().strip("[]\"' ")
-    return ""
-
-
-def make_genre_maps(movies: pd.DataFrame):
-    """movie_id -> genre_id, plus the genre->id table and the unknown id."""
-    genres = (movies.drop_duplicates("movie_id").set_index("movie_id")["genres"]
-              .map(_first_genre))
-    genre_to_id = {g: i for i, g in enumerate(sorted(genres.unique()))}
-    unknown_genre_id = len(genre_to_id)
-    genre_to_id["__unknown__"] = unknown_genre_id
-    movie_to_genre = {mid: genre_to_id[g] for mid, g in genres.items()}
-    return movie_to_genre, genre_to_id, unknown_genre_id
-
-
-# ---- sparse-matrix substrate (members x films) -----------------------------
-@dataclass
-class LBData:
-    mat_csc: sparse.csc_matrix       # ratings, members x films
-    mask_csc: sparse.csc_matrix      # 1 where rated
-    members: pd.Index                # position -> member_id
-    movies: pd.Index                 # position -> movie_id
-    member_sum: np.ndarray           # all-time rating sum per member
-    member_count: np.ndarray         # all-time rating count per member
-    movie_mean: np.ndarray
-    movie_std: np.ndarray            # ddof=0 dispersion per film
-    movie_count: np.ndarray
-    genre_id: np.ndarray             # per movie position
-    global_mean: float
-    unknown_genre_id: int
-
-    @property
-    def n_members(self) -> int:
-        return len(self.members)
-
-    @property
-    def n_movies(self) -> int:
-        return len(self.movies)
-
-
-def build_data(ratings: pd.DataFrame, movies: pd.DataFrame, value: str = "raw") -> LBData:
-    """``value="z"`` builds the PEER matrix from each member's all-time z-score
-    instead of their raw rating -- members are indexed identically either way,
-    so a raw-built and a z-built LBData share row/column positions (see
-    rotten_tomatoes.pseudo_users.build_split's docstring for why this matters:
-    it's what lets the z-score track reuse a peer matrix built in z-units
-    while the user's own seen ratings are standardized per-episode instead,
-    see episode_feature_row_z). Members with ~zero all-time rating variance
-    get z=0 (a neutral, information-free peer contribution) rather than being
-    dropped, since LBData's row/column set must stay identical across both
-    builds.
-    """
-    members = pd.Index(ratings.user_id.drop_duplicates())
-    movie_ids = pd.Index(ratings.movie_id.drop_duplicates())
-    ui = pd.Categorical(ratings.user_id, categories=members).codes
-    mi = pd.Categorical(ratings.movie_id, categories=movie_ids).codes
-    raw_values = ratings.rating.to_numpy(float)
-    if value == "z":
-        member_sum_raw = np.bincount(ui, weights=raw_values, minlength=len(members))
-        member_count_raw = np.bincount(ui, minlength=len(members)).astype(float)
-        member_mu_raw = member_sum_raw / np.maximum(member_count_raw, 1)
-        member_sqsum_raw = np.bincount(ui, weights=raw_values ** 2, minlength=len(members))
-        member_var_raw = np.maximum(
-            member_sqsum_raw / np.maximum(member_count_raw, 1) - member_mu_raw ** 2, 0)
-        member_sigma_raw = np.sqrt(member_var_raw)
-        safe_sigma = np.where(member_sigma_raw > 1e-9, member_sigma_raw, 1.0)
-        values = np.where(member_sigma_raw[ui] > 1e-9,
-                          (raw_values - member_mu_raw[ui]) / safe_sigma[ui], 0.0)
-    else:
-        values = raw_values
-    mat = sparse.csr_matrix((values, (ui, mi)), shape=(len(members), len(movie_ids)))
-    mask = mat.copy()
-    mask.data[:] = 1.0
-
-    member_sum = np.asarray(mat.sum(axis=1)).ravel()
-    member_count = np.asarray(mask.sum(axis=1)).ravel()
-    movie_sum = np.asarray(mat.sum(axis=0)).ravel()
-    movie_count = np.asarray(mask.sum(axis=0)).ravel()
-    movie_mean = np.divide(movie_sum, movie_count, out=np.zeros_like(movie_sum),
-                           where=movie_count > 0)
-    sq = mat.copy(); sq.data **= 2
-    movie_sq = np.asarray(sq.sum(axis=0)).ravel()
-    movie_var = np.maximum(movie_sq / np.maximum(movie_count, 1) - movie_mean ** 2, 0)
-    movie_std = np.sqrt(movie_var)
-
-    movie_to_genre, _, unknown_genre_id = make_genre_maps(movies)
-    genre_id = np.array([movie_to_genre.get(mid, unknown_genre_id) for mid in movie_ids],
-                        dtype=np.int64)
-
-    return LBData(mat.tocsc(), mask.tocsc(), members, movie_ids, member_sum,
-                  member_count, movie_mean, movie_std, movie_count, genre_id,
-                  float(values.mean()), unknown_genre_id)
-
-
-def similarity(data: LBData, seen_cols: np.ndarray, seen_vals: np.ndarray,
-               exclude_member: int | None):
-    """Shrunk Pearson alignment + magnitude of every member to this profile.
-
-    Returns (sim[M], mag[M], overlap[M]). Vectorised over all members via the
-    sparse film submatrix, the same formula as the RT model."""
-    x = np.asarray(seen_vals, dtype=float)
-    peers = data.mat_csc[:, seen_cols]
-    peer_mask = data.mask_csc[:, seen_cols]
-    overlap = np.asarray(peer_mask.sum(axis=1)).ravel()
-    peer_values = np.asarray(peers.sum(axis=1)).ravel()
-    peers_sq = peers.copy(); peers_sq.data **= 2
-    peer_sq_values = np.asarray(peers_sq.sum(axis=1)).ravel()
-    sx = np.asarray(peer_mask @ x).ravel()
-    sxx = np.asarray(peer_mask @ (x ** 2)).ravel()
-    sxy = np.asarray(peers @ x).ravel()
-    denom_overlap = np.maximum(overlap, 1)
-    numer = sxy - sx * peer_values / denom_overlap
-    var_x = sxx - sx ** 2 / denom_overlap
-    var_peer = peer_sq_values - peer_values ** 2 / denom_overlap
-    denom = np.sqrt(np.maximum(var_x * var_peer, 0))
-    sim = np.divide(numer, denom, out=np.zeros_like(numer),
-                    where=(overlap >= MIN_APP_OVERLAP) & (denom > 1e-12))
-    sim *= np.minimum(overlap, K_SHRINK) / K_SHRINK
-    mag = np.divide(sxy, peer_sq_values, out=np.ones_like(sxy), where=peer_sq_values > 1e-12)
-    if exclude_member is not None:
-        sim[exclude_member] = 0.0
-    return sim, mag, overlap
 
 
 def target_raters(data: LBData, target_col: int, exclude_member: int | None):
@@ -374,10 +425,9 @@ def episode_feature_row(data: LBData, seen_cols: np.ndarray, seen_vals: np.ndarr
         "max_overlap": float(overlap.max()) if len(overlap) else 0.0,
         "n_reviewers": int(len(raters)),
         "dispersion": float(data.movie_std[target_col]),
-        "genre_id": int(data.genre_id[target_col]),
         "user_mean": float(np.mean(seen_vals)),
     }
-    tail.update(facet_tail_from_context(fc, seen_cols, seen_vals - seen_vals.mean(), target_col))
+    tail.update(facet_tail_from_context(fc, seen_cols, seen_vals, target_col))
     return main_feature_row(sim[raters], target_deviations(data, raters, values), tail)
 
 
@@ -410,32 +460,119 @@ def episode_feature_row_z(data_raw: LBData, data_z: LBData, seen_cols: np.ndarra
         "max_overlap": float(overlap.max()) if len(overlap) else 0.0,
         "n_reviewers": int(len(raters)),
         "dispersion": float(data_z.movie_std[target_col]),
-        "genre_id": int(data_z.genre_id[target_col]),
         "user_mean": float(seen_z.mean()),  # ~0 by construction
     }
+    # seen_z is already the per-episode standardized rating (mean 0, std 1),
+    # so it IS the "raw value on this track's scale" the affinity tail wants.
     tail.update(facet_tail_from_context(fc, seen_cols, seen_z, target_col))
     row = main_feature_row(sim[raters], target_deviations(data_z, raters, values_z), tail)
     return row, mu, sigma
 
 
-# ---- episode generation ----------------------------------------------------
-def eligible_members(data: LBData, min_ratings: int) -> np.ndarray:
-    return np.flatnonzero(data.member_count >= min_ratings)
+# ---- episode generation, parallelized over members --------------------------
+# generate_rows/generate_paired_rows fan out over independent members, so the
+# per-member work (below) can run in a ProcessPoolExecutor. data/data_z/fc are
+# read-only for the whole call, so each worker receives them exactly once (via
+# the pool initializer) rather than once per task. Each member draws from its
+# own RNG stream seeded by (base_seed, member) -- never a stream threaded
+# sequentially through the member loop -- so the resulting rows are identical
+# regardless of --jobs or how members are chunked across workers.
+_WORKER: dict = {}
 
 
-def partition_members(data: LBData, min_ratings: int = 6, seed: int = SEED):
-    """Deterministic disjoint train/validation/test member split (70/15/15),
-    mirroring the RT pseudo-user partition."""
-    perm = np.random.default_rng(seed).permutation(eligible_members(data, min_ratings))
-    n_train = int(0.70 * len(perm))
-    n_val = int(0.15 * len(perm))
-    return {"train": perm[:n_train],
-            "validation": perm[n_train:n_train + n_val],
-            "test": perm[n_train + n_val:]}
+def _init_worker(data, data_z, fc):
+    _WORKER["data"] = data
+    _WORKER["data_z"] = data_z
+    _WORKER["fc"] = fc
+
+
+def _accumulate(result, rows, targets, meta, z_rows, z_targets, z_meta, mus, sigmas):
+    r_rows, r_targets, r_meta, r_z_rows, r_z_targets, r_z_meta, r_mus, r_sigmas = result
+    rows.extend(r_rows); targets.extend(r_targets); meta.extend(r_meta)
+    z_rows.extend(r_z_rows); z_targets.extend(r_z_targets); z_meta.extend(r_z_meta)
+    mus.extend(r_mus); sigmas.extend(r_sigmas)
+
+
+def _rows_one_member(data, data_z, fc, member, n_grid, profiles_per_n, base_seed):
+    rows, targets, meta = [], [], []
+    z_rows, z_targets, z_meta, mus, sigmas = [], [], [], [], []
+    rng = np.random.default_rng([base_seed, member])
+    films, film_vals = data.member_hist[member]
+    if len(films) < 6:
+        return rows, targets, meta, z_rows, z_targets, z_meta, mus, sigmas
+    for n in n_grid:
+        size = len(films) - 1 if n is None else n
+        if size < 1 or size >= len(films):
+            continue
+        for _ in range(profiles_per_n):
+            order = rng.permutation(len(films))
+            target_pos = int(order[0])
+            seen_pos = order[1:size + 1]
+            seen_cols, seen_vals = films[seen_pos], film_vals[seen_pos]
+            target_col, target_value = int(films[target_pos]), float(film_vals[target_pos])
+            row = episode_feature_row(data, seen_cols, seen_vals, target_col, member, fc)
+            if row is None:
+                continue
+            if data_z is not None:
+                z_result = episode_feature_row_z(data, data_z, seen_cols, seen_vals,
+                                                  target_col, member, fc)
+                if z_result is None:
+                    continue
+                z_row, mu, sigma = z_result
+                z_rows.append(z_row)
+                z_targets.append((target_value - mu) / sigma)
+                z_meta.append((member, target_col, -1 if n is None else n, len(seen_pos)))
+                mus.append(mu)
+                sigmas.append(sigma)
+            rows.append(row)
+            targets.append(target_value)
+            meta.append((member, target_col, -1 if n is None else n, len(seen_pos)))
+    return rows, targets, meta, z_rows, z_targets, z_meta, mus, sigmas
+
+
+def _rows_task(args):
+    member, n_grid, profiles_per_n, base_seed = args
+    return _rows_one_member(_WORKER["data"], _WORKER["data_z"], _WORKER["fc"],
+                            member, n_grid, profiles_per_n, base_seed)
+
+
+def _paired_rows_one_member(data, data_z, fc, member, n_grid, targets_per_user,
+                            draws, n_max_finite, seed):
+    rows, targets, meta = [], [], []
+    z_rows, z_targets, z_meta, mus, sigmas = [], [], [], [], []
+    for (member_, target_col, target_value, n, draw, seen_cols, seen_vals) in \
+            iter_paired_episodes_for_member(data, member, n_grid, targets_per_user,
+                                            draws, n_max_finite, seed):
+        row = episode_feature_row(data, seen_cols, seen_vals, target_col, member_, fc)
+        if row is None:
+            continue
+        if data_z is not None:
+            z_result = episode_feature_row_z(data, data_z, seen_cols, seen_vals,
+                                              target_col, member_, fc)
+            if z_result is None:
+                continue
+            z_row, mu, sigma = z_result
+            z_rows.append(z_row)
+            z_targets.append((target_value - mu) / sigma)
+            z_meta.append((member_, target_col, n, draw, len(seen_cols)))
+            mus.append(mu)
+            sigmas.append(sigma)
+        rows.append(row)
+        targets.append(target_value)
+        meta.append((member_, target_col, n, draw, len(seen_cols)))
+    return rows, targets, meta, z_rows, z_targets, z_meta, mus, sigmas
+
+
+def _paired_rows_task(args):
+    member, n_grid, targets_per_user, draws, n_max_finite, seed = args
+    return _paired_rows_one_member(_WORKER["data"], _WORKER["data_z"], _WORKER["fc"],
+                                   member, n_grid, targets_per_user, draws,
+                                   n_max_finite, seed)
 
 
 def generate_rows(data: LBData, members: np.ndarray, rng: np.random.Generator,
-                  n_grid, profiles_per_n: int, fc: FacetContext, data_z: LBData | None = None):
+                  n_grid, profiles_per_n: int, fc: FacetContext,
+                  data_z: LBData | None = None, jobs: int = 1):
     """Unpaired random-holdout rows for train/val (label = held-out rating).
 
     If ``data_z`` is given, also builds the z-track row for the identical
@@ -443,47 +580,31 @@ def generate_rows(data: LBData, members: np.ndarray, rng: np.random.Generator,
     Returns ``(raw_frame, z_frame, mu, sigma)`` in that case, else just
     ``raw_frame``. An episode is dropped from BOTH tracks if either row is
     unavailable, keeping the two tracks exactly aligned.
+
+    ``jobs`` > 1 splits the members across a `ProcessPoolExecutor` (see the
+    module-level worker helpers above); ``jobs=1`` runs in-process exactly as
+    before. One integer is drawn from ``rng`` up front to seed every member's
+    independent stream, so the resulting rows are identical either way.
     """
+    members = [int(m) for m in members]
+    base_seed = int(rng.integers(0, 2**63 - 1))
     rows, targets, meta = [], [], []
     z_rows, z_targets, z_meta, mus, sigmas = [], [], [], [], []
-    mat_csr = data.mat_csc.tocsr()
-    for i, member in enumerate(members):
-        member = int(member)
-        lo, hi = mat_csr.indptr[member], mat_csr.indptr[member + 1]
-        films = mat_csr.indices[lo:hi]
-        film_vals = mat_csr.data[lo:hi]
-        if len(films) < 6:
-            continue
-        for n in n_grid:
-            size = len(films) - 1 if n is None else n
-            if size < 1 or size >= len(films):
-                continue
-            for _ in range(profiles_per_n):
-                order = rng.permutation(len(films))
-                target_pos = int(order[0])
-                seen_pos = order[1:size + 1]
-                seen_cols, seen_vals = films[seen_pos], film_vals[seen_pos]
-                target_col, target_value = int(films[target_pos]), float(film_vals[target_pos])
-                row = episode_feature_row(data, seen_cols, seen_vals, target_col, member, fc)
-                if row is None:
-                    continue
-                if data_z is not None:
-                    z_result = episode_feature_row_z(data, data_z, seen_cols, seen_vals,
-                                                      target_col, member, fc)
-                    if z_result is None:
-                        continue
-                    z_row, mu, sigma = z_result
-                    z_rows.append(z_row)
-                    z_targets.append((target_value - mu) / sigma)
-                    z_meta.append((member, target_col, -1 if n is None else n, len(seen_pos)))
-                    mus.append(mu)
-                    sigmas.append(sigma)
-                rows.append(row)
-                targets.append(target_value)
-                meta.append((member, target_col, -1 if n is None else n,
-                             len(seen_pos)))
-        if (i + 1) % 500 == 0:
-            print(f"  rows: {i + 1}/{len(members)} members")
+    if jobs <= 1:
+        for i, member in enumerate(members):
+            result = _rows_one_member(data, data_z, fc, member, n_grid, profiles_per_n, base_seed)
+            _accumulate(result, rows, targets, meta, z_rows, z_targets, z_meta, mus, sigmas)
+            if (i + 1) % 500 == 0:
+                print(f"  rows: {i + 1}/{len(members)} members")
+    else:
+        tasks = [(m, n_grid, profiles_per_n, base_seed) for m in members]
+        chunksize = max(1, len(members) // (jobs * 4))
+        with ProcessPoolExecutor(max_workers=jobs, initializer=_init_worker,
+                                 initargs=(data, data_z, fc)) as ex:
+            for i, result in enumerate(ex.map(_rows_task, tasks, chunksize=chunksize)):
+                _accumulate(result, rows, targets, meta, z_rows, z_targets, z_meta, mus, sigmas)
+                if (i + 1) % 500 == 0:
+                    print(f"  rows: {i + 1}/{len(members)} members")
     raw_frame = _frame(rows, targets, meta)
     if data_z is not None:
         z_frame = _frame(z_rows, z_targets, z_meta)
@@ -491,64 +612,26 @@ def generate_rows(data: LBData, members: np.ndarray, rng: np.random.Generator,
     return raw_frame
 
 
-def iter_paired_episodes(data: LBData, members: np.ndarray, n_grid,
-                         targets_per_user: int, draws: int, n_max_finite: int):
-    """Nested paired episodes: fixed targets + fixed popularity-ordered seen
-    prefix per (member, draw), so every n is scored on an identical set."""
-    rng = np.random.default_rng(SEED)
-    mat_csr = data.mat_csc.tocsr()
-    popularity = data.movie_count
-    for member in members:
-        member = int(member)
-        lo, hi = mat_csr.indptr[member], mat_csr.indptr[member + 1]
-        films = mat_csr.indices[lo:hi]
-        film_vals = mat_csr.data[lo:hi]
-        if len(films) <= n_max_finite:
-            continue
-        target_local = rng.choice(len(films), size=min(targets_per_user, len(films)),
-                                   replace=False)
-        for t in target_local:
-            target_col = int(films[t])
-            target_value = float(film_vals[t])
-            rest = np.array([j for j in range(len(films)) if j != t])
-            weights = popularity[films[rest]].astype(float)
-            weights = weights / weights.sum() if weights.sum() > 0 else None
-            for draw in range(draws):
-                order = rng.choice(rest, size=len(rest), replace=False, p=weights)
-                for n in n_grid:
-                    size = len(order) if n is None else n
-                    if n is not None and size > len(order):
-                        continue
-                    seen_local = order[:size]
-                    yield (member, target_col, target_value,
-                           -1 if n is None else n, draw,
-                           films[seen_local], film_vals[seen_local])
-
-
 def generate_paired_rows(data: LBData, members: np.ndarray, n_grid,
                          targets_per_user: int, draws: int, n_max_finite: int,
-                         fc: FacetContext, data_z: LBData | None = None):
-    """See `generate_rows` for the ``data_z`` contract."""
+                         fc: FacetContext, data_z: LBData | None = None,
+                         jobs: int = 1, seed: int = SEED):
+    """See `generate_rows` for the ``data_z`` and ``jobs`` contract."""
+    members = [int(m) for m in members]
     rows, targets, meta = [], [], []
     z_rows, z_targets, z_meta, mus, sigmas = [], [], [], [], []
-    for (member, target_col, target_value, n, draw, seen_cols, seen_vals) in \
-            iter_paired_episodes(data, members, n_grid, targets_per_user, draws, n_max_finite):
-        row = episode_feature_row(data, seen_cols, seen_vals, target_col, member, fc)
-        if row is None:
-            continue
-        if data_z is not None:
-            z_result = episode_feature_row_z(data, data_z, seen_cols, seen_vals, target_col, member, fc)
-            if z_result is None:
-                continue
-            z_row, mu, sigma = z_result
-            z_rows.append(z_row)
-            z_targets.append((target_value - mu) / sigma)
-            z_meta.append((member, target_col, n, draw, len(seen_cols)))
-            mus.append(mu)
-            sigmas.append(sigma)
-        rows.append(row)
-        targets.append(target_value)
-        meta.append((member, target_col, n, draw, len(seen_cols)))
+    if jobs <= 1:
+        for member in members:
+            result = _paired_rows_one_member(data, data_z, fc, member, n_grid,
+                                             targets_per_user, draws, n_max_finite, seed)
+            _accumulate(result, rows, targets, meta, z_rows, z_targets, z_meta, mus, sigmas)
+    else:
+        tasks = [(m, n_grid, targets_per_user, draws, n_max_finite, seed) for m in members]
+        chunksize = max(1, len(members) // (jobs * 4))
+        with ProcessPoolExecutor(max_workers=jobs, initializer=_init_worker,
+                                 initargs=(data, data_z, fc)) as ex:
+            for result in ex.map(_paired_rows_task, tasks, chunksize=chunksize):
+                _accumulate(result, rows, targets, meta, z_rows, z_targets, z_meta, mus, sigmas)
     raw_frame = _frame(rows, targets, meta)
     if data_z is not None:
         z_frame = _frame(z_rows, z_targets, z_meta)
@@ -558,8 +641,6 @@ def generate_paired_rows(data: LBData, members: np.ndarray, n_grid,
 
 def _frame(rows, targets, meta):
     features = pd.DataFrame(rows, columns=FEATURE_COLS)
-    if len(features):
-        features["genre_id"] = features["genre_id"].astype(int)
     paired = bool(meta) and len(meta[0]) == 5
     columns = ["member", "tcol", "n", "draw", "n_seen"] if paired else ["member", "tcol", "n", "n_seen"]
     meta_df = pd.DataFrame(meta, columns=columns)
@@ -591,17 +672,18 @@ def app_similarity(scores: pd.DataFrame, user: pd.Series, k_shrink: int = K_SHRI
 
 
 def app_features(target_scores: pd.DataFrame, matches: pd.DataFrame,
-                 members: pd.DataFrame, user: pd.Series,
-                 movie_genre: dict, unknown_genre_id: int, mf):
+                 members: pd.DataFrame, user: pd.Series, mf, theme_sim,
+                 global_std: float):
     """Model features for the selected catalog films. `members` is indexed by
     member_id with all-time `rating_sum`,`rating_count`. ``mf`` is a
-    `movie_features.MovieFacets` (movie_id-keyed). Returns (df, movie_ids)."""
+    `movie_features.MovieFacets` (movie_id-keyed), ``theme_sim`` a
+    `movie_features.ThemeSimilarity`. Returns (df, movie_ids)."""
     overlap_counts = matches["overlap"].to_numpy()
     positive = overlap_counts[overlap_counts > 0]
     mean_overlap = float(positive.mean()) if len(positive) else 0.0
     max_overlap = float(overlap_counts.max()) if len(overlap_counts) else 0.0
     seen_movie_ids = list(user.index)
-    seen_devs = user.to_numpy(dtype=float) - float(user.mean())
+    seen_values = user.to_numpy(dtype=float)
     rows, movie_ids = [], []
     for movie_id, group in target_scores.groupby("movie_id"):
         peer = members.reindex(group["user_id"])
@@ -616,11 +698,10 @@ def app_features(target_scores: pd.DataFrame, matches: pd.DataFrame,
             "mean_overlap": mean_overlap, "max_overlap": max_overlap,
             "n_reviewers": int(len(group)),
             "dispersion": float(np.std(values, ddof=1)) if len(values) > 1 else 0.0,
-            "genre_id": int(movie_genre.get(movie_id, unknown_genre_id)),
             "user_mean": float(user.mean())}
-        tail.update(facet_tail_from_ids(mf, seen_movie_ids, seen_devs, movie_id))
+        tail.update(facet_tail_from_ids(mf, theme_sim, seen_movie_ids, seen_values,
+                                        movie_id, global_std))
         rows.append(main_feature_row(sim, values - peer_mean, tail))
         movie_ids.append(movie_id)
     features = pd.DataFrame(rows, columns=FEATURE_COLS)
-    features["genre_id"] = features["genre_id"].astype(int)
     return features, movie_ids

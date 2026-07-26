@@ -1,11 +1,12 @@
 """Design 3: a residual neural-network ensemble over the same episode features
-as Design 2.
+as Design 2. No genre embedding: the per-genre affinity block already gives
+the model per-genre information directly (see network.py).
 
-Self-contained: it generates its own training/validation rows and paired test
-rows (the shared seed SEED+1 makes the training data identical to Design 2's,
-and the deterministic paired episodes make the test rows byte-identical). It
-trains on the Apple GPU (MPS) when available, with AdamW + a ReduceLROnPlateau
-schedule and early stopping, and averages three independently seeded networks.
+Loads the cached row pool built by ``build_rows`` (`make rt-rows`), so this
+trainer and XGBoost fit on byte-identical rows and score the same paired test
+episodes. Trains on the Apple GPU (MPS) when available, with AdamW + a
+ReduceLROnPlateau schedule and early stopping, and averages three
+independently seeded networks.
 
 Also trains a second, z-score-track ensemble: the target and peer features are
 expressed in z-space (each rater standardized by their own scale -- the user
@@ -13,40 +14,56 @@ side by THIS episode's own seen-set mean/std, never a critic's all-time
 stats), and predictions are converted back to the raw scale before scoring, so
 the two tracks' RMSE is directly comparable.
 
-Run from src/:  python -m design3_neural.train
+Run from src/:  python -m rotten_tomatoes.train_neural
 
 Outputs: results/models/design3_mlp{,_z}.pt (+ meta),
          results/tables/design3_{results.json,test_predictions.parquet}
 """
+import argparse
 import json
 import time
+from pathlib import Path
 
 import numpy as np
-import pandas as pd
+# NOTE: never import xgboost in this process. torch and xgboost each bundle
+# their own OpenMP runtime, and a process that loads both segfaults the moment
+# either does real parallel work; the scratch plot scores the XGBoost sibling
+# in a clean subprocess instead (see plots.score_other_design).
 import torch
 from torch import nn
 
-from rotten_tomatoes.config import MODELS, MOVIES_PARQUET, REVIEWS_PARQUET, SEED, TABLES, VALUE_COL
+from rotten_tomatoes.config import MODELS, SEED, TABLES
 from rotten_tomatoes import features as F
+from rotten_tomatoes.build_rows import load_rows
 from .network import TabularResNet
-from rotten_tomatoes.pseudo_users import build_split, partition_pseudo_users
+from rotten_tomatoes.pseudo_users import rmse
+from .plots import plot_rmse_by_n, rmse_by_n, score_other_design
 
 MODEL_FILE = MODELS / "design3_mlp.pt"
 MODEL_META_FILE = MODELS / "design3_mlp_meta.json"
 MODEL_FILE_Z = MODELS / "design3_mlp_z.pt"
 MODEL_META_FILE_Z = MODELS / "design3_mlp_z_meta.json"
 
-N_GRID_TRAIN = [3, 5, 10, 20, 50, None]
-TRAIN_PROFILES_PER_N = 32
-VALIDATION_PROFILES_PER_N = 8
-
-NUMERIC_COLS = [c for c in F.FEATURE_COLS if c != "genre_id"]
-GENRE_COL = "genre_id"
+NUMERIC_COLS = F.FEATURE_COLS
 LOG_COLS = ["n_observed", "mean_overlap", "max_overlap", "n_reviewers"] + \
            [f"d{i}_cnt" for i in range(10)]
 LOG_IDX = np.array([NUMERIC_COLS.index(c) for c in LOG_COLS])
 
-EMB_DIM, WIDTH, DEPTH, DROPOUT = 24, 512, 6, 0.1
+# Fixed per-column NaN sentinel for the network (XGBoost splits on NaN
+# natively via missing-value direction; the network needs a value it can
+# learn as "this affinity has no evidence"). Rating-scale averages get -1
+# (impossible on the 0-5 scale); z-scores get 0 (their own neutral value,
+# and the "no evidence" case coincides with the column's own zero point).
+# Every other numeric column never contains NaN, so its entry is unused.
+_Z_SCORE_COLS = (F.GENRE_Z_COLS + F.ACTOR_BYRATING_Z_COLS
+                 + F.ACTOR_BYCOUNT_Z_COLS + ["user_director_z"])
+_RATING_AVG_COLS = ["user_theme_avg"] + F.CAST_OVERLAP_RATING_COLS
+_IMPUTE_OVERRIDES = {**{c: 0.0 for c in _Z_SCORE_COLS},
+                     **{c: -1.0 for c in _RATING_AVG_COLS}}
+IMPUTE_VALUE = np.array([_IMPUTE_OVERRIDES.get(c, 0.0) for c in NUMERIC_COLS],
+                        dtype=np.float32)
+
+WIDTH, DEPTH, DROPOUT = 512, 6, 0.1
 ENSEMBLE_SIZE, MAX_EPOCHS, PATIENCE = 3, 300, 20
 BATCH, LR, WEIGHT_DECAY = 8192, 2e-3, 1e-5
 
@@ -55,73 +72,63 @@ def pick_device() -> torch.device:
     return torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
 
 
-def to_arrays(frame: pd.DataFrame, target: np.ndarray, meta: pd.DataFrame):
-    numeric = frame[NUMERIC_COLS].to_numpy(dtype=np.float32)
-    genre = frame[GENRE_COL].to_numpy(dtype=np.int64)
-    return numeric, genre, target.astype(np.float32), meta
-
-
-def rmse(pred, true) -> float:
-    return float(np.sqrt(np.mean((pred - true) ** 2)))
+def to_arrays(frame, target, meta):
+    return frame[NUMERIC_COLS].to_numpy(np.float32), target.astype(np.float32), meta
 
 
 def preprocess(tr, va, te):
+    """Impute with the fixed ``IMPUTE_VALUE`` sentinel (not the column mean --
+    see its definition) so a missing affinity always lands at the same
+    out-of-range or neutral point regardless of what this particular split's
+    training rows happened to average."""
     for arr in (tr, va, te):
         arr[:, LOG_IDX] = np.log1p(np.clip(arr[:, LOG_IDX], 0, None))
-    mu_impute = np.nanmean(tr, axis=0)
     for arr in (tr, va, te):
         mask = np.isnan(arr)
-        arr[mask] = np.take(mu_impute, np.where(mask)[1])
+        arr[mask] = np.take(IMPUTE_VALUE, np.where(mask)[1])
     mu = tr.mean(axis=0)
     sd = tr.std(axis=0)
     sd[sd < 1e-6] = 1.0
-    return (tr - mu) / sd, (va - mu) / sd, (te - mu) / sd, mu_impute, mu, sd
+    return (tr - mu) / sd, (va - mu) / sd, (te - mu) / sd, mu, sd
 
 
 @torch.no_grad()
-def predict(model, numeric, genre, device):
+def predict(model, numeric, device):
     model.eval()
     out = []
     for start in range(0, len(numeric), 16384):
         nb = torch.from_numpy(numeric[start:start + 16384]).to(device)
-        gb = torch.from_numpy(genre[start:start + 16384]).to(device)
-        out.append(model(nb, gb).cpu().numpy())
+        out.append(model(nb).cpu().numpy())
     return np.concatenate(out)  # clip happens after any z convert-back
 
 
-def train_one(seed, tr, va, n_genres, device):
-    tr_num, tr_gen, tr_y = tr
-    va_num, va_gen, va_y = va
+def train_one(seed, tr, va, device):
+    tr_num, tr_y = tr
+    va_num, va_y = va
     torch.manual_seed(seed)
-    model = TabularResNet(tr_num.shape[1], n_genres, EMB_DIM, WIDTH, DEPTH, DROPOUT).to(device)
+    model = TabularResNet(tr_num.shape[1], WIDTH, DEPTH, DROPOUT).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=6, min_lr=1e-5)
     loss_fn = nn.MSELoss()
-
     tr_num_t = torch.from_numpy(tr_num).to(device)
-    tr_gen_t = torch.from_numpy(tr_gen).to(device)
     tr_y_t = torch.from_numpy(tr_y).to(device)
     va_num_t = torch.from_numpy(va_num).to(device)
-    va_gen_t = torch.from_numpy(va_gen).to(device)
     n = len(tr_y)
-
-    best_val, best_state, stale = np.inf, None, 0
+    best_val, best_state, stale, epoch = np.inf, None, 0, 0
     for epoch in range(MAX_EPOCHS):
         model.train()
         order = torch.randperm(n, device=device)
         for start in range(0, n, BATCH):
             idx = order[start:start + BATCH]
             opt.zero_grad()
-            loss_fn(model(tr_num_t[idx], tr_gen_t[idx]), tr_y_t[idx]).backward()
+            loss_fn(model(tr_num_t[idx]), tr_y_t[idx]).backward()
             opt.step()
         model.eval()
         with torch.no_grad():
-            val_pred = model(va_num_t, va_gen_t).cpu().numpy()
-        # Unclipped: va_y is on the raw [0,5] scale for the raw track but
-        # unbounded z-space for the z track, so clipping here would only be
-        # valid for one of the two tracks. Early stopping just needs a
-        # consistent, monotonic validation signal, which unclipped MSE gives.
-        val_rmse = rmse(val_pred, va_y)
+            val_pred = model(va_num_t).cpu().numpy()
+        # Unclipped: va_y is raw [0,5] for the raw track but unbounded
+        # z-space for the z track, so a single clip boundary can't serve both.
+        val_rmse = rmse(val_pred - va_y)
         sched.step(val_rmse)
         if val_rmse < best_val - 1e-5:
             best_val, stale = val_rmse, 0
@@ -133,50 +140,41 @@ def train_one(seed, tr, va, n_genres, device):
     return best_state, best_val, epoch
 
 
-def train_ensemble(tr_p, va_p, te_num, te_gen, n_genres, device, seed_offset=0):
+def train_ensemble(tr_p, va_p, te_num, device, ensemble_size, seed_offset=0):
     states, val_scores = [], []
     ens = np.zeros(len(te_num), dtype=np.float64)
-    for member in range(ENSEMBLE_SIZE):
-        state, best_val, epochs = train_one(SEED + seed_offset + member, tr_p, va_p, n_genres, device)
+    for member in range(ensemble_size):
+        state, best_val, epochs = train_one(SEED + seed_offset + member, tr_p, va_p, device)
         states.append(state)
         val_scores.append(best_val)
-        model = TabularResNet(len(NUMERIC_COLS), n_genres, EMB_DIM, WIDTH, DEPTH, DROPOUT).to(device)
+        model = TabularResNet(len(NUMERIC_COLS), WIDTH, DEPTH, DROPOUT).to(device)
         model.load_state_dict(state)
-        member_pred = predict(model, te_num, te_gen, device)
+        member_pred = predict(model, te_num, device)
         ens += member_pred
-        print(f"  member {member + 1}/{ENSEMBLE_SIZE}: val {best_val:.4f}, {epochs + 1} epochs")
-    return ens / ENSEMBLE_SIZE, states, val_scores
+        print(f"  member {member+1}/{ensemble_size}: val {best_val:.4f}, {epochs+1} epochs")
+    return ens / ensemble_size, states, val_scores
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ensemble", type=int, default=ENSEMBLE_SIZE)
+    parser.add_argument("--plot-file", type=str, default=None,
+                        help="write a scratch RMSE-by-n plot here after training "
+                             "(default: results/rotten_tomatoes/figures/temp_design3.png)")
+    parser.add_argument("--no-plot", action="store_true",
+                        help="skip the scratch plot entirely (used by `make`)")
+    args = parser.parse_args()
+
     started = time.time()
-    np.random.seed(SEED)
     device = pick_device()
     print(f"device: {device}")
 
-    rng = np.random.default_rng(SEED + 1)
-    scored = pd.read_parquet(REVIEWS_PARQUET)
-    # Both value columns must be present so the raw and z-space Splits share
-    # an identical critic/movie index (see build_split's docstring).
-    scored = scored[scored[VALUE_COL].notna() & scored["z"].notna()]
-    movies = pd.read_parquet(MOVIES_PARQUET)
-    genre_of_movie, genre_to_id, unknown_genre_id = F.make_genre_maps(movies)
-    n_genres = len(genre_to_id)
-
-    split = build_split(scored, movies)
-    split_z = build_split(scored, movies, value_col="z")
-    parts = partition_pseudo_users(split)
-    print("Joining gsimonx37 movie facets (cached after first run) ...")
-    fc = F.build_facet_context(movies, split.tgt_movie_index)
-    print("Generating features (raw + z; identical to Design 2 by seed) ...")
-    ((tr_x, tr_y, _), (tr_z_x, tr_z_y, _), _, _) = F.generate_rows(
-        split, parts["train"], rng, genre_of_movie, N_GRID_TRAIN,
-        TRAIN_PROFILES_PER_N, unknown_genre_id, fc, sp_z=split_z)
-    ((va_x, va_y, _), (va_z_x, va_z_y, _), _, _) = F.generate_rows(
-        split, parts["validation"], rng, genre_of_movie, N_GRID_TRAIN,
-        VALIDATION_PROFILES_PER_N, unknown_genre_id, fc, sp_z=split_z)
-    ((te_x, te_y, te_meta), (te_z_x, te_z_y, te_z_meta), te_mu, te_sigma) = F.generate_paired_rows(
-        split, parts["test"], genre_of_movie, unknown_genre_id, fc, sp_z=split_z)
+    rows = load_rows()
+    (tr_x, tr_y, _), (tr_z_x, tr_z_y, _) = rows["train"], rows["train_z"]
+    (va_x, va_y, _), (va_z_x, va_z_y, _) = rows["val"], rows["val_z"]
+    (te_x, te_y, te_meta), (te_z_x, te_z_y, te_z_meta) = rows["test"], rows["test_z"]
+    te_mu, te_sigma = rows["te_mu"], rows["te_sigma"]
+    print(f"loaded cached rows ({time.time() - started:.0f}s)")
 
     tr = to_arrays(tr_x, tr_y, None)
     va = to_arrays(va_x, va_y, None)
@@ -185,57 +183,56 @@ def main() -> None:
     va_z = to_arrays(va_z_x, va_z_y, None)
     te_z = to_arrays(te_z_x, te_z_y, te_z_meta)
 
-    tr_num, tr_gen, tr_y, _ = tr
-    va_num, va_gen, va_y, _ = va
-    te_num, te_gen, te_y, te_meta = te
-    tr_z_num, tr_z_gen, tr_z_y, _ = tr_z
-    va_z_num, va_z_gen, va_z_y, _ = va_z
-    te_z_num, te_z_gen, te_z_y, te_z_meta = te_z
-    print(f"  rows: train {len(tr_y):,}  val {len(va_y):,}  test {len(te_y):,} "
-          f"({time.time() - started:.0f}s)")
-    print(f"  features: {len(NUMERIC_COLS)} numeric + genre embedding")
+    tr_num, tr_y, _ = tr
+    va_num, va_y, _ = va
+    te_num, te_y, te_meta = te
+    tr_z_num, tr_z_y, _ = tr_z
+    va_z_num, va_z_y, _ = va_z
+    te_z_num, te_z_y, te_z_meta = te_z
+    print(f"rows: train {len(tr_y):,} val {len(va_y):,} test {len(te_y):,} "
+          f"({time.time()-started:.0f}s total)")
+    print(f"  features: {len(NUMERIC_COLS)} numeric (no genre embedding)")
 
-    tr_num, va_num, te_num, mu_impute, mu, sd = preprocess(tr_num, va_num, te_num)
-    tr_z_num, va_z_num, te_z_num, mu_impute_z, mu_z, sd_z = preprocess(tr_z_num, va_z_num, te_z_num)
+    tr_num, va_num, te_num, mu, sd = preprocess(tr_num, va_num, te_num)
+    tr_z_num, va_z_num, te_z_num, mu_z, sd_z = preprocess(tr_z_num, va_z_num, te_z_num)
 
     print("\nTraining raw-track ensemble ...")
     ens, states, val_scores = train_ensemble(
-        (tr_num, tr_gen, tr_y), (va_num, va_gen, va_y), te_num, te_gen, n_genres, device, seed_offset=0)
+        (tr_num, tr_y), (va_num, va_y), te_num, device, args.ensemble, seed_offset=0)
     ens = np.clip(ens, 0.0, 5.0)
-    test_rmse = rmse(ens, te_y)
-    print(f"Ensemble ({ENSEMBLE_SIZE}) raw test RMSE {test_rmse:.4f} ({time.time() - started:.0f}s)")
+    test_rmse = rmse(ens - te_y)
+    print(f"Ensemble ({args.ensemble}) raw test RMSE {test_rmse:.4f} ({time.time() - started:.0f}s)")
 
     print("\nTraining z-score-track ensemble ...")
     ens_z, states_z, val_scores_z = train_ensemble(
-        (tr_z_num, tr_z_gen, tr_z_y), (va_z_num, va_z_gen, va_z_y), te_z_num, te_z_gen,
-        n_genres, device, seed_offset=100)
+        (tr_z_num, tr_z_y), (va_z_num, va_z_y), te_z_num, device, args.ensemble, seed_offset=100)
     preds_z_raw = np.clip(te_mu + te_sigma * ens_z, 0.0, 5.0)
-    test_rmse_z = rmse(preds_z_raw, te_y)  # te_y: same episodes' raw ground truth
-    print(f"Ensemble ({ENSEMBLE_SIZE}) z test RMSE {test_rmse_z:.4f} "
+    test_rmse_z = rmse(preds_z_raw - te_y)  # te_y: same episodes' raw ground truth
+    print(f"Ensemble ({args.ensemble}) z test RMSE {test_rmse_z:.4f} "
           f"(raw scale after convert-back, {time.time() - started:.0f}s)")
 
     MODELS.mkdir(parents=True, exist_ok=True)
     torch.save({"state_dicts": states, "numeric_cols": NUMERIC_COLS,
-                "genre_col": GENRE_COL, "log_cols": LOG_COLS, "mu_impute": mu_impute,
-                "mu": mu, "sd": sd, "n_genres": n_genres, "emb_dim": EMB_DIM,
-                "width": WIDTH, "depth": DEPTH, "dropout": DROPOUT}, MODEL_FILE)
+                "log_cols": LOG_COLS, "mu_impute": IMPUTE_VALUE,
+                "mu": mu, "sd": sd,
+                "width": WIDTH, "depth": DEPTH, "dropout": DROPOUT,
+                "rating_min": 0.0, "rating_max": 5.0}, MODEL_FILE)
     MODEL_META_FILE.write_text(json.dumps({
         "model_file": MODEL_FILE.name, "feature_columns": F.FEATURE_COLS,
-        "ensemble_size": ENSEMBLE_SIZE, "test_rmse": float(test_rmse),
+        "ensemble_size": args.ensemble, "test_rmse": float(test_rmse),
         "mean_member_val_rmse": float(np.mean(val_scores)),
-        "architecture": {"embedding_dim": EMB_DIM, "width": WIDTH, "depth": DEPTH,
-                         "dropout": DROPOUT}}, indent=2))
+        "architecture": {"width": WIDTH, "depth": DEPTH, "dropout": DROPOUT}}, indent=2))
 
     torch.save({"state_dicts": states_z, "numeric_cols": NUMERIC_COLS,
-                "genre_col": GENRE_COL, "log_cols": LOG_COLS, "mu_impute": mu_impute_z,
-                "mu": mu_z, "sd": sd_z, "n_genres": n_genres, "emb_dim": EMB_DIM,
-                "width": WIDTH, "depth": DEPTH, "dropout": DROPOUT}, MODEL_FILE_Z)
+                "log_cols": LOG_COLS, "mu_impute": IMPUTE_VALUE,
+                "mu": mu_z, "sd": sd_z,
+                "width": WIDTH, "depth": DEPTH, "dropout": DROPOUT,
+                "rating_min": 0.0, "rating_max": 5.0}, MODEL_FILE_Z)
     MODEL_META_FILE_Z.write_text(json.dumps({
         "model_file": MODEL_FILE_Z.name, "feature_columns": F.FEATURE_COLS,
-        "ensemble_size": ENSEMBLE_SIZE, "test_rmse": float(test_rmse_z),
+        "ensemble_size": args.ensemble, "test_rmse": float(test_rmse_z),
         "mean_member_val_rmse": float(np.mean(val_scores_z)),
-        "architecture": {"embedding_dim": EMB_DIM, "width": WIDTH, "depth": DEPTH,
-                         "dropout": DROPOUT},
+        "architecture": {"width": WIDTH, "depth": DEPTH, "dropout": DROPOUT},
         "note": "target is (raw - mu_user)/sigma_user; mu_user/sigma_user come "
                 "from the user's own seen-set ratings, not a critic's all-time "
                 "stats. test_rmse above is already converted back to the raw scale.",
@@ -248,7 +245,7 @@ def main() -> None:
     out.to_parquet(TABLES / "design3_test_predictions.parquet", index=False)
     (TABLES / "design3_results.json").write_text(json.dumps({
         "test_rmse": float(test_rmse), "test_rmse_z": float(test_rmse_z),
-        "ensemble_size": ENSEMBLE_SIZE, "test_rows": int(len(te_y))}, indent=2))
+        "ensemble_size": args.ensemble, "test_rows": int(len(te_y))}, indent=2))
     per_n = (out.assign(se=lambda d: (d["pred_nn"] - d["y"]) ** 2)
              .groupby("n")["se"].mean().pipe(np.sqrt))
     per_n_z = (out.assign(se=lambda d: (d["pred_nn_z"] - d["y"]) ** 2)
@@ -258,6 +255,29 @@ def main() -> None:
     print("\nNeural net test RMSE by seen-count (z track, converted back):")
     print(per_n_z.round(4).to_string())
     print(f"\nSaved {MODEL_FILE} and {MODEL_FILE_Z}. Done in {time.time() - started:.0f}s")
+
+    if not args.no_plot:
+        n_col = te_meta["n"].to_numpy()
+        curves = {
+            "design3": rmse_by_n(ens, te_y, n_col),
+            "design3_z": rmse_by_n(preds_z_raw, te_y, n_col),
+            "zero": rmse_by_n(np.full(len(te_y), rows["global_mean"]), te_y, n_col),
+            "movie_mean": rmse_by_n(rows["movie_mean"][te_meta["tcol"].to_numpy()], te_y, n_col),
+        }
+        xgb_path = MODELS / "design2_xgboost.json"
+        if xgb_path.exists():
+            try:
+                # scored in a fresh process -- see plots.score_other_design
+                other_pred = score_other_design("xgb", xgb_path, te_x, F.FEATURE_COLS, 0.0, 5.0)
+                curves["design2"] = rmse_by_n(other_pred, te_y, n_col)
+            except Exception as e:
+                print(f"  (scratch plot: skipping design2 curve -- {e})")
+        plot_path = Path(args.plot_file) if args.plot_file else TABLES.parent / "figures" / "temp_design3.png"
+        plot_rmse_by_n(curves, plot_path,
+                       "Rotten Tomatoes Design 3: scratch RMSE by seen-count (this run)",
+                       "RMSE on paired test episodes (0-5)")
+        print(f"Scratch plot written to {plot_path} "
+              f"(canonical figures are only produced by `make rt-analyze`)")
 
 
 if __name__ == "__main__":

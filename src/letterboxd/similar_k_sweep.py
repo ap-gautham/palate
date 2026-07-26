@@ -7,7 +7,7 @@ that episode's seen set, and reports Design 1's RMSE per bucket, for several
 choices of k_neighbors (the neighbour-list size). The Design 1 prediction
 itself does not depend on k -- only the bucketing does -- so all three k
 sweeps score the SAME episodes, isolating exactly the effect of how
-"similar" is defined. Mirrors rotten_tomatoes/design1_analytic/similar_k_sweep.py.
+"similar" is defined. Mirrors rotten_tomatoes/similar_k_sweep.py.
 
 Run from src/:  python -m letterboxd.similar_k_sweep
 Outputs: results/letterboxd/figures/plotD_similar_k_sweep.png,
@@ -24,10 +24,10 @@ import pandas as pd
 from .config import RATING_MAX, RATING_MIN, RATINGS_PARQUET, RESULTS, ROOT, SEED
 from . import movie_features as MF
 from . import features as F
+from .pseudo_users import K_SHRINK, rmse
 
 FIGURES = RESULTS / "figures"
 N_SEEN = 10
-K_SHRINK = F.K_SHRINK
 K_VALUES = [10, 20, 30]
 USERS_N = 1200
 DRAWS_PER_USER = 5
@@ -35,10 +35,6 @@ BUCKET_CAP = 5
 SURFACE = "#fcfcfb"
 C = {10: "#1baf7a", 20: "#2a78d6", 30: "#4a3aa7"}
 N_MOVIES = 1_000
-
-
-def rmse(err) -> float:
-    return float(np.sqrt(np.mean(np.square(err))))
 
 
 def load_movies_json() -> list[dict]:
@@ -99,7 +95,9 @@ def sample_episodes(sub: pd.DataFrame, member_ratings: dict, id_to_pos: dict) ->
                 continue
             true = member_ratings[member][target_mid]
             seen_positions = frozenset(id_to_pos[m] for m in seen_mids if m in id_to_pos)
-            episodes.append((id_to_pos[target_mid], seen_positions, (pred - true) ** 2))
+            # store the raw signed error: rmse() below squares internally, so
+            # appending a squared error here would compute sqrt(mean(err^4))
+            episodes.append((id_to_pos[target_mid], seen_positions, pred - true))
         if (i + 1) % 200 == 0:
             print(f"  {i + 1}/{len(sample_members)} members sampled")
     return episodes
@@ -132,9 +130,9 @@ def run() -> pd.DataFrame:
         similar = MF.top_similar(movies_json, mean_rating, k_neighbors=k, seed=SEED)
         similar_sets = [frozenset(s) for s in similar]
         buckets: dict[str, list[float]] = {}
-        for target_pos, seen_positions, se in episodes:
+        for target_pos, seen_positions, err in episodes:
             count = len(similar_sets[target_pos] & seen_positions)
-            buckets.setdefault(bucket_label(count), []).append(se)
+            buckets.setdefault(bucket_label(count), []).append(err)
         for label, errs in buckets.items():
             rows.append({"k_neighbors": k, "similar_seen": label,
                         "n_episodes": len(errs), "rmse": rmse(errs)})
@@ -149,7 +147,7 @@ def run() -> pd.DataFrame:
 
 
 def summarize_and_pick(out: pd.DataFrame) -> int | None:
-    """See rotten_tomatoes/design1_analytic/similar_k_sweep.py's docstring --
+    """See rotten_tomatoes/similar_k_sweep.py's docstring --
     identical selection rule (lowest RMSE at >=3 similar films seen, among
     buckets with at least 5 episodes)."""
     best_k, best_rmse = None, None

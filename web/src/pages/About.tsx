@@ -81,7 +81,7 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
         <div className="cards">
           <div className="card d1">
             <h3>Analytic formula</h3>
-            <span className="n">0.796</span>
+            <span className="n">0.801</span>
             <p>
               An explicit rule: centre each film on its peer mean, then add similarity-weighted, magnitude-scaled
               deviations. A second variant restricts this to your 10 most strongly aligned <em>or</em>{" "}
@@ -90,17 +90,17 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
           </div>
           <div className="card d2">
             <h3>XGBoost</h3>
-            <span className="n">0.770</span>
+            <span className="n">0.783</span>
             <p>
-              Gradient-boosted trees over ~110 engineered features: similarity deciles, consensus, dispersion, your
-              average, and a per-facet taste-affinity term for genre, theme, studio, director, actor, decade,
-              language, and country.
+              Gradient-boosted trees over 116 engineered features: similarity deciles, consensus, dispersion, your
+              average, and per-genre, per-theme, per-actor, and per-director taste-affinity blocks built from a
+              movie-metadata join.
             </p>
           </div>
           <div className="card d3">
             <h3>Neural network</h3>
-            <span className="n">0.776</span>
-            <p>A residual MLP ensemble with a genre embedding, trained on the GPU over the identical features.</p>
+            <span className="n">0.789</span>
+            <p>A residual MLP ensemble trained on the GPU over the identical features (no separate genre embedding -- the per-genre affinity block already gives it that information directly).</p>
           </div>
         </div>
         <p className="muted small" style={{ marginTop: 14 }}>
@@ -126,45 +126,45 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
             <tbody>
               <tr>
                 <td>Tomatometer → score</td>
-                <td>0.830</td>
-                <td>0.830</td>
-                <td>0.830</td>
-                <td>0.830</td>
+                <td>0.853</td>
+                <td>0.853</td>
+                <td>0.853</td>
+                <td>0.853</td>
               </tr>
               <tr>
                 <td>Mean of all reviewers</td>
-                <td>0.826</td>
-                <td>0.826</td>
-                <td>0.826</td>
-                <td>0.826</td>
+                <td>0.843</td>
+                <td>0.843</td>
+                <td>0.843</td>
+                <td>0.843</td>
               </tr>
               <tr>
                 <td>Analytic formula</td>
-                <td>0.964</td>
-                <td>0.864</td>
-                <td>0.811</td>
-                <td>0.796</td>
+                <td>0.971</td>
+                <td>0.874</td>
+                <td>0.812</td>
+                <td>0.801</td>
               </tr>
               <tr>
                 <td>Analytic, top-|sim| variant</td>
-                <td>0.989</td>
-                <td>0.889</td>
-                <td>0.828</td>
-                <td>0.808</td>
+                <td>0.993</td>
+                <td>0.902</td>
+                <td>0.835</td>
+                <td>0.811</td>
               </tr>
               <tr>
                 <td>XGBoost</td>
-                <td>0.809</td>
-                <td>0.792</td>
-                <td>0.777</td>
-                <td className="best">0.770</td>
+                <td>0.830</td>
+                <td>0.812</td>
+                <td>0.793</td>
+                <td className="best">0.783</td>
               </tr>
               <tr>
                 <td>Neural network</td>
-                <td>0.813</td>
-                <td>0.793</td>
-                <td>0.778</td>
-                <td className="best">0.776</td>
+                <td>0.831</td>
+                <td>0.815</td>
+                <td>0.794</td>
+                <td className="best">0.789</td>
               </tr>
             </tbody>
           </table>
@@ -172,7 +172,7 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
         <figure>
           <img src={`${BASE}assets/plotA_rmse_vs_n.png`} alt="RMSE versus the number of films you have rated, for each method" />
           <figcaption>
-            The trained models beat every flat baseline once a profile exists. The new top-|sim| analytic variant
+            The trained models beat every flat baseline once a profile exists. The top-|sim| analytic variant
             trails the full formula slightly at every seen-count — a negative result, reported as found.
           </figcaption>
         </figure>
@@ -185,14 +185,15 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
           <p style={{ marginTop: 0 }}>
             Most of the gain over the flat average is <b>knowing whether you rate high or low</b> — anchoring the
             consensus on your own average. An attribution test shows that similarity-based <b>taste-matching</b>,
-            the project's whole premise, adds comparatively little on top. Adding real movie-facet features (genre,
-            studio, director, actor, and more) helped XGBoost only modestly (0.775→0.770) — a small effect on top
-            of calibration, not a replacement for it.
+            the project's whole premise, adds comparatively little on top. Adding real movie-facet features (per-genre,
+            theme, actor, and director affinities) shifts XGBoost's error by well under 0.01 — a small effect on
+            top of calibration, not a replacement for it.
           </p>
           <p style={{ marginBottom: 0 }}>
-            The new top-|sim| analytic variant — restricting to your 10 most strongly aligned or anti-aligned
-            peers — was tried as a way to sharpen the taste-matching signal. It underperforms the full formula on
-            both datasets. Reported honestly rather than tuned to manufacture a win.
+            The top-|sim| analytic variant — restricting to your 10 most strongly aligned or anti-aligned
+            peers — was tried as a way to sharpen the taste-matching signal. It trails the full formula on Rotten
+            Tomatoes and only manages a dead heat on Letterboxd. Reported honestly rather than tuned to manufacture
+            a win.
           </p>
         </div>
         <figure>
@@ -212,17 +213,17 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
         <div className="cards">
           <div className="card d1">
             <h3>Analytic formula</h3>
-            <span className="n">1.507</span>
+            <span className="n">1.502</span>
             <p>Same movie-mean-centred, magnitude-scaled formula (and top-|sim| variant) as Rotten Tomatoes.</p>
           </div>
           <div className="card d2">
             <h3>XGBoost</h3>
-            <span className="n">1.455</span>
+            <span className="n">1.417</span>
             <p>Same feature contract as Rotten Tomatoes' Design 2, minus the Tomatometer feature.</p>
           </div>
           <div className="card d3">
             <h3>Neural network</h3>
-            <span className="n">1.468</span>
+            <span className="n">1.418</span>
             <p>Same residual-MLP architecture — genuinely trained, not a placeholder.</p>
           </div>
         </div>
@@ -243,8 +244,9 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
           <p style={{ marginTop: 0, marginBottom: 0 }}>
             <b>Honest cross-dataset finding:</b> raw RMSE isn't comparable across a 0–5 scale and a 1–10 scale, so
             normalizing by rating range (RMSE ÷ range) puts them on the same footing. Rotten Tomatoes normalizes to
-            ~0.154–0.162; Letterboxd normalizes to ~0.162–0.170 — <b>comparable</b>, with Rotten Tomatoes actually
-            slightly <i>better</i> despite its far sparser critic pseudo-user profiles. More real rating data did{" "}
+            ~0.157–0.162; Letterboxd to ~0.157–0.167 — <b>comparable</b>, with the trained models landing at
+            essentially identical normalized error on both, and the analytic formula slightly <i>better</i> on
+            Rotten Tomatoes despite its far sparser critic pseudo-user profiles. More real rating data did{" "}
             <b>not</b> translate into a lower normalized error here. Letterboxd's genuine value is dense real-member
             histories, not a lower headline RMSE — reported as found, not tuned to confirm the hypothesis.
           </p>
@@ -274,31 +276,31 @@ export function About({ onOpenApp }: { onOpenApp: () => void }) {
             <tbody>
               <tr>
                 <td>Analytic formula</td>
-                <td>0.796</td>
-                <td>0.926</td>
-                <td>1.507</td>
-                <td>1.640</td>
+                <td>0.801</td>
+                <td>0.948</td>
+                <td>1.502</td>
+                <td>1.607</td>
               </tr>
               <tr>
                 <td>Analytic, top-|sim| variant</td>
-                <td>0.808</td>
-                <td>0.817</td>
-                <td>1.526</td>
-                <td>1.528</td>
+                <td>0.811</td>
+                <td>0.844</td>
+                <td>1.501</td>
+                <td>1.501</td>
               </tr>
               <tr>
                 <td>XGBoost</td>
-                <td>0.770</td>
-                <td>0.778</td>
-                <td>1.455</td>
-                <td className="best">1.455</td>
+                <td>0.783</td>
+                <td>0.792</td>
+                <td>1.417</td>
+                <td className="best">1.412</td>
               </tr>
               <tr>
                 <td>Neural network</td>
-                <td>0.776</td>
-                <td>0.781</td>
-                <td>1.468</td>
-                <td className="best">1.464</td>
+                <td>0.789</td>
+                <td>0.793</td>
+                <td>1.418</td>
+                <td className="best">1.406</td>
               </tr>
             </tbody>
           </table>

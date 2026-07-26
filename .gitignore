@@ -30,3 +30,6 @@ report/*.fdb_latexmk
 web/node_modules/
 web/js_validate_out.json
 web/js_validate_lb_out.json
+
+# per-run scratch plots (see train_*.py --plot-file); canonical figures come from analyze
+results/*/figures/temp_*.png

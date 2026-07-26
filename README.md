@@ -98,7 +98,7 @@ datasets via a parameterized clamp range), and each neural net is a
 hand-written forward pass (`web/src/lib/neuralnet.ts`, also shared) over the
 ensemble's raw weights — including the movie-facet affinity computation
 (`web/src/lib/features.ts`), ported from Python's `_facet_tail`. Rotten
-Tomatoes' export lives under `src/rotten_tomatoes/web_export/export.py`;
+Tomatoes' export lives at `src/rotten_tomatoes/web_export.py`;
 Letterboxd's mirrors it at `src/letterboxd/web_export.py`. Both TypeScript
 ports are checked against their Python inference paths in
 `web/scripts/validate*.ts` (the analytic formulas match to float precision;
@@ -121,7 +121,7 @@ nearest content neighbours, red otherwise — listing 20 similar films
 (K-means over genre/decade/theme/studio/director/actor/runtime/rating/year,
 `movie_features.top_similar`) with a tip to rate them to improve that
 prediction. The neighbour-list length (`k_neighbors`) was itself tuned: a
-paired-episode sweep (`rotten_tomatoes.design1_analytic.similar_k_sweep`,
+paired-episode sweep (`rotten_tomatoes.similar_k_sweep`,
 `letterboxd.similar_k_sweep`) bucketed 6,000 held-out predictions by how many
 of the target's k nearest neighbours were already in the rater's seen set,
 for `k_neighbors` ∈ {10, 20, 30}. On Rotten Tomatoes RMSE trends down (noisily,
@@ -139,7 +139,7 @@ To rebuild the site after retraining a model:
 
 ```bash
 cd src
-python -m rotten_tomatoes.web_export.export
+python -m rotten_tomatoes.web_export
 python -m letterboxd.web_export
 cd ../web && npm install && npm run build   # writes into docs/
 ```
@@ -157,34 +157,31 @@ minute join over the full catalog); delete the cache to force a rebuild.
 Rotten Tomatoes (place the Kaggle CSVs in `data/rotten_tomatoes/raw/`):
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cd src
-for m in rotten_tomatoes.preprocessing.build_dataset rotten_tomatoes.preprocessing.audit \
-         rotten_tomatoes.design1_analytic.run rotten_tomatoes.design2_xgboost.train \
-         rotten_tomatoes.design3_neural.train rotten_tomatoes.design1_analytic.attribution \
-         rotten_tomatoes.app_catalog.export rotten_tomatoes.comparison.analysis; do
-  ../.venv/bin/python -m "$m"
-done
-cd ..
-.venv/bin/python -m unittest discover -s tests -v
+make setup        # python3 -m venv .venv && pip install -r requirements.txt
+make rt           # preprocess -> audit -> analytic -> xgboost -> neural -> attribution -> catalog -> analysis
+make test
 ```
+
+Each stage is also its own target, so a stopped run can be resumed:
+`make rt-xgboost`, `make rt-analyze`, … (`make help` lists them). The targets
+are thin wrappers — `make rt-xgboost` is exactly
+`cd src && ../.venv/bin/python -m rotten_tomatoes.train_xgboost`.
 
 Letterboxd (place the Kaggle CSVs in `data/letterboxd/raw/` — see
 [`src/letterboxd/README.md`](src/letterboxd/README.md) for the full contract):
 
 ```bash
-cd src
-for m in letterboxd.preprocess letterboxd.train_xgboost letterboxd.train_neural letterboxd.analyze; do
-  ../.venv/bin/python -m "$m"
-done
+make lb           # preprocess -> xgboost -> neural -> analysis
 ```
 
-All random seeds are fixed. The pseudo-user substrate (`pseudo_users.py`) and
-the feature contract (`features.py`) each live once, at the top of
-`src/rotten_tomatoes/`, and are imported by all three Rotten Tomatoes designs
-(`design1_analytic/`, `design2_xgboost/`, `design3_neural/`) — so the
-cross-design comparison is exact by construction. `src/letterboxd/` mirrors
-this layout with its own `features.py`. Full methodology, every formula term
+All random seeds are fixed. Both packages use the same flat module layout —
+`pseudo_users.py` (the rater matrix, similarity, and episode protocol),
+`features.py` (the feature contract), `movie_features.py` (the gsimonx37
+join), then one module per design (`train_analytic.py`, `train_xgboost.py`,
+`train_neural.py`) and `analyze.py` for the cross-design comparison. The
+substrate and the feature contract each live once per package and are imported
+by all three of that package's designs, so the cross-design comparison is exact
+by construction. The two packages share no code: nothing in `src/letterboxd/`
+imports `src/rotten_tomatoes/` or vice versa. Full methodology, every formula term
 explained, leakage controls, and the complete results (including the z-score
 experiment for both projects) are in **[report/report.pdf](report/report.pdf)**.

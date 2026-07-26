@@ -66,7 +66,7 @@ function addVec(a: Float32Array, b: Float32Array): Float32Array {
 }
 
 /** Standardize a raw feature row into the network's numeric input vector.
- * Mirrors design3_neural/predict.py:predict's preprocessing block exactly:
+ * Mirrors predict_neural.py:predict's preprocessing block exactly:
  * log1p(clip>=0) on log_cols first, then NaN-impute, then z-score. */
 export function prepareNumeric(model: NNModel, row: Record<string, number>): Float32Array {
   const { numericCols, logCols, mu, sd, muImpute } = model.meta;
@@ -87,8 +87,8 @@ function layerView(model: NNModel, member: Float32Array, name: string): Float32A
   return member.subarray(l.offset, l.offset + l.size);
 }
 
-function forwardOne(model: NNModel, member: Float32Array, numeric: Float32Array, genreId: number): number {
-  const { width, embDim, depth } = model.meta;
+function forwardOne(model: NNModel, member: Float32Array, numeric: Float32Array): number {
+  const { width, depth } = model.meta;
   const xNorm = batchNorm(
     numeric,
     layerView(model, member, "input_norm.weight"),
@@ -96,14 +96,8 @@ function forwardOne(model: NNModel, member: Float32Array, numeric: Float32Array,
     layerView(model, member, "input_norm.running_mean"),
     layerView(model, member, "input_norm.running_var")
   );
-  const embAll = layerView(model, member, "embedding.weight");
-  const emb = embAll.subarray(genreId * embDim, genreId * embDim + embDim);
 
-  const cat = new Float32Array(xNorm.length + emb.length);
-  cat.set(xNorm, 0);
-  cat.set(emb, xNorm.length);
-
-  let h = linear(cat, layerView(model, member, "proj.weight"), layerView(model, member, "proj.bias"), width, cat.length);
+  let h = linear(xNorm, layerView(model, member, "proj.weight"), layerView(model, member, "proj.bias"), width, xNorm.length);
 
   for (let i = 0; i < depth; i++) {
     const p = `blocks.${i}.net`;
@@ -130,8 +124,7 @@ export function predictNeuralNet(
   range: [number, number] = [0, 5]
 ): number {
   const numeric = prepareNumeric(model, row);
-  const genreId = row.genre_id;
   let sum = 0;
-  for (const member of model.members) sum += forwardOne(model, member, numeric, genreId);
+  for (const member of model.members) sum += forwardOne(model, member, numeric);
   return clamp(sum / model.members.length, range[0], range[1]);
 }

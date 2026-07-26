@@ -1,0 +1,5 @@
+1) Compare top 20 actors of target movie with users seen movies. Select 5 with most overlap, select 5 based on highest average rating, select subsetx with maximum overlap (e.g 10 actors common, 7 actors common etc). Store the average ratings from each.
+2) Same for director
+3) For Genre, target movie can have multiple genre. For each check how many common seen movies there are and record the average rating and movie count. 
+4) Same for theme and average is based on similarity using text to vec embedding
+5) Each row is pesudo-user and all the details are summarised features in a single row

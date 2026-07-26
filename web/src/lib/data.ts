@@ -15,13 +15,15 @@ async function fetchBuffer(path: string): Promise<ArrayBuffer> {
 }
 
 export async function loadCatalog(): Promise<Catalog> {
-  const [movies, critics, criticIdxBuf, movieIdxBuf, scoreBuf, similar] = await Promise.all([
+  const [movies, critics, criticIdxBuf, movieIdxBuf, scoreBuf, similar, themeSim, kShrinkMeta] = await Promise.all([
     fetchJson<Movie[]>("movies.json"),
     fetchJson<Critic[]>("critics.json"),
     fetchBuffer("ratings_critic_idx.bin"),
     fetchBuffer("ratings_movie_idx.bin"),
     fetchBuffer("ratings_score.bin"),
     fetchJson<number[][]>("similar.json").catch(() => []),
+    fetchJson<{ themes: string[]; matrix: number[][] }>("theme_similarity.json"),
+    fetchJson<{ kShrink: number; globalStd: number }>("k_shrink.json").catch(() => ({ kShrink: 8, globalStd: 1 })),
   ]);
   const criticIdx = new Uint16Array(criticIdxBuf);
   const movieIdx = new Uint16Array(movieIdxBuf);
@@ -41,8 +43,14 @@ export async function loadCatalog(): Promise<Catalog> {
     byMovie[m].score[c] = score[i];
   }
   const similarByMovie = movies.map((_, i) => similar[i] ?? []);
+  const themeWidth = themeSim.themes.length;
+  const themeMatrix = new Float32Array(themeWidth * themeWidth);
+  for (let i = 0; i < themeWidth; i++) themeMatrix.set(themeSim.matrix[i], i * themeWidth);
 
-  return { movies, critics, byMovie, similar: similarByMovie };
+  return {
+    movies, critics, byMovie, similar: similarByMovie,
+    themeMatrix, themeVocab: themeSim.themes, globalStd: kShrinkMeta.globalStd,
+  };
 }
 
 async function loadXgb(xgbFile: string): Promise<XgbModel> {

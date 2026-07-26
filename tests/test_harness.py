@@ -8,12 +8,13 @@ from scipy import sparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-# Design 1 owns the analytic formula; the pseudo-user substrate is identical in
-# every design folder, so testing one copy tests them all.
+# Design 1 owns the analytic formula; the pseudo-user substrate lives once at
+# the package root and is shared by all three designs, so testing it here
+# tests the substrate every design trains on.
 from rotten_tomatoes.pseudo_users import (Split, iter_paired_episodes,
                                            partition_pseudo_users,
                                            sample_random_holdout, similarity)
-from rotten_tomatoes.design1_analytic.analytic import predict_movies
+from rotten_tomatoes.analytic import predict_movies
 
 
 def make_split() -> Split:

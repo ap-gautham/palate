@@ -2,7 +2,7 @@
 what actually helps -- the movie consensus, the magnitude scaling, or the
 signed similarity deviation.
 
-Run from src/:  python -m design1_analytic.attribution
+Run from src/:  python -m rotten_tomatoes.attribution
 """
 import json
 

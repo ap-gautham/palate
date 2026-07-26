@@ -29,6 +29,7 @@ import torch
 
 from .config import MODELS, MOVIES_PARQUET, RATING_MAX, RATING_MIN, RATINGS_PARQUET, SEED
 from . import features as F
+from . import pseudo_users as PU
 from . import movie_features as MF
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,9 +40,11 @@ N_MOVIES = 1_000
 def export_catalog():
     ratings = pd.read_parquet(RATINGS_PARQUET)
     movies = pd.read_parquet(MOVIES_PARQUET)
-    _, genre_to_id, unknown_genre_id = F.make_genre_maps(movies)
-    movie_genre = movies.drop_duplicates("movie_id").set_index("movie_id")["genres"].map(F._first_genre)
-    movie_genre_id = movie_genre.map(genre_to_id).fillna(unknown_genre_id).astype(int)
+    # genre_to_id/unknown_genre_id feed only the exported meta.json maps below
+    # (a debugging/reference artifact) -- the per-movie genre feature the
+    # models actually see is the 40-column genre affinity block, resolved
+    # through the canonical vocab in movie_features.py, not this single-genre id.
+    _, genre_to_id, unknown_genre_id = PU.make_genre_maps(movies)
 
     popularity = ratings.groupby("movie_id").size()
     top_movies = popularity.nlargest(N_MOVIES).index
@@ -50,7 +53,6 @@ def export_catalog():
     movie_meta = (movies.drop_duplicates("movie_id").set_index("movie_id")
                   .reindex(top_movies)[["title", "year"]])
     movie_meta["n_scores"] = popularity.reindex(top_movies)
-    movie_meta["genre_id"] = movie_genre_id.reindex(top_movies).fillna(unknown_genre_id).astype(int)
     movie_meta = movie_meta.reset_index()
     movie_index = {mid: i for i, mid in enumerate(movie_meta["movie_id"])}
 
@@ -72,27 +74,32 @@ def export_catalog():
 
     # Rich movie facets (gsimonx37 join): affinity sets as raw string arrays
     # (browser compares by string equality, mirroring the Python frozenset
-    # intersection in features.py's _facet_tail), plus genre/decade multi-hot
-    # ids from the SAME fixed training vocab so mh_genre_i/mh_decade_i line up
-    # with the trained models' columns.
+    # intersection in features.py's affinity blocks), plus genre multi-hot
+    # ids from the SAME fixed canonical training vocab so mh_genre_i lines up
+    # with the trained models' columns, and themeIds -- ids into the theme
+    # similarity matrix (theme_similarity.json) the browser's theme block needs.
     mf = F.load_project_movie_facets(movies)
+    theme_sim = F.load_project_theme_similarity()
 
     def facets_of(mid):
         fs = mf.facet_sets.get(mid, {})
         return {f: sorted(fs.get(f, [])) for f in MF.FACETS}
 
+    def theme_ids_of(mid):
+        strs = mf.facet_sets.get(mid, {}).get("theme", [])
+        return sorted(theme_sim.vocab[t] for t in strs if t in theme_sim.vocab)
+
     movies_json = [{
         "id": row.movie_id, "title": row.title if isinstance(row.title, str) and row.title
               else row.movie_id.replace("-", " ").title(),
-        "year": clean(row.year), "genreId": int(row.genre_id), "nScores": int(row.n_scores),
+        "year": clean(row.year), "nScores": int(row.n_scores),
         "facets": facets_of(row.movie_id),
         "genreMh": mf.genre_multihot.get(row.movie_id, []),
-        "decadeMh": mf.decade_multihot.get(row.movie_id, []),
+        "themeIds": theme_ids_of(row.movie_id),
         "runtimeLog": clean(mf.runtime_log.get(row.movie_id)),
         "gsRating": clean(mf.gs_rating.get(row.movie_id)),
         "nThemesLog": float(np.log1p(mf.n_themes.get(row.movie_id, 0))),
         "nLanguagesLog": float(np.log1p(mf.n_languages.get(row.movie_id, 0))),
-        "nCountriesLog": float(np.log1p(mf.n_countries.get(row.movie_id, 0))),
     } for row in movie_meta.itertuples()]
 
     members_json = [{
@@ -103,6 +110,13 @@ def export_catalog():
 
     (OUT / "movies.json").write_text(dumps(movies_json))
     (OUT / "members.json").write_text(dumps(members_json))
+
+    # Theme embedding similarity matrix (see movie_features.build_theme_similarity):
+    # sorted vocab + the dense cosine matrix, so the browser's theme block does
+    # a dot-product lookup instead of running a transformer client-side.
+    themes_sorted = sorted(theme_sim.vocab, key=lambda t: theme_sim.vocab[t])
+    (OUT / "theme_similarity.json").write_text(dumps({
+        "themes": themes_sorted, "matrix": theme_sim.matrix.tolist()}))
 
     # "Movies like this one" suggestions for the app's predict-row dropdown
     # (K-means on content facets; see movie_features.top_similar). Consensus
@@ -119,13 +133,19 @@ def export_catalog():
     movie_idx.tofile(OUT / "ratings_movie_idx.bin")
     score.tofile(OUT / "ratings_score.bin")
 
+    # sigma_u fallback for the affinity blocks' z-scores (see features.py's
+    # _facet_tail) when a user's own seen-set std is ~0. Computed from this
+    # same shipped ratings table so Python app-time, the browser, and this
+    # export all agree on the identical constant.
+    global_std = float(sub["rating"].std())
     (OUT / "meta.json").write_text(dumps({
-        "ratingMin": RATING_MIN, "ratingMax": RATING_MAX, "kShrink": F.K_SHRINK,
+        "ratingMin": RATING_MIN, "ratingMax": RATING_MAX, "kShrink": PU.K_SHRINK,
         "genreToId": genre_to_id, "unknownGenreId": unknown_genre_id,
         "membersWritten": len(member_ids), "ratingsWritten": len(sub),
+        "globalStd": global_std,
     }))
     print(f"catalog: {len(movies_json)} movies, {len(members_json)} members, "
-          f"{len(score)} ratings, k_shrink={F.K_SHRINK}")
+          f"{len(score)} ratings, k_shrink={PU.K_SHRINK}")
 
 
 def export_xgboost(model_name="letterboxd_xgboost.json", meta_name="letterboxd_xgboost_meta.json",
@@ -157,7 +177,7 @@ def export_xgboost(model_name="letterboxd_xgboost.json", meta_name="letterboxd_x
 # both networks share the same architecture (depth 6 residual blocks).
 LAYER_ORDER = (
     ["input_norm.weight", "input_norm.bias", "input_norm.running_mean", "input_norm.running_var",
-     "embedding.weight", "proj.weight", "proj.bias"]
+     "proj.weight", "proj.bias"]
     + [f"blocks.{i}.net.{layer}.{field}"
        for i in range(6)
        for layer, field in [
@@ -194,12 +214,9 @@ def export_neural_net(model_name="letterboxd_neural.pt", weights_prefix="nn_weig
     meta = {
         "numericCols": ckpt["numeric_cols"],
         "logCols": ckpt["log_cols"],
-        "genreCol": ckpt["genre_col"],
         "muImpute": ckpt["mu_impute"].tolist(),
         "mu": ckpt["mu"].tolist(),
         "sd": ckpt["sd"].tolist(),
-        "nGenres": int(ckpt["n_genres"]),
-        "embDim": int(ckpt["emb_dim"]),
         "width": int(ckpt["width"]),
         "depth": int(ckpt["depth"]),
         "ensembleSize": len(ckpt["state_dicts"]),

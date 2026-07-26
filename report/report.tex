@@ -28,7 +28,7 @@
 \vspace{-0.6cm}
 
 \begin{abstract}
-Two fully parallel projects predict a person's rating of a film from other raters: critic pseudo-users on Rotten Tomatoes (301 test critics, 43{,}344 paired episodes) and real members on Letterboxd (300 test members, 41{,}166 paired episodes). Three designs compete on identical held-out episodes in each project: an analytic movie-mean-centered formula (with a second variant restricted to the 10 most-aligned-or-anti-aligned peers), an XGBoost regressor, and a residual neural-network ensemble -- all sharing one engineered feature contract that now includes, beyond similarity and consensus, a real movie-facet contract (genre, theme, studio, director, actor, decade, language, country) joined from the gsimonx37/letterboxd Kaggle metadata dump, with a per-user affinity term for each facet. On Rotten Tomatoes, full-history RMSE is 0.796 (Design 1), 0.770 (XGBoost), 0.776 (neural net), all beating the 0.826--0.830 flat baselines. On Letterboxd, full-history RMSE is 1.507, 1.455, 1.468 against a 1.639 flat baseline. Every design also trains a parallel z-score track (each rater standardized to their own scale, predicting pure deviation, converted back before scoring) to test whether the gain is calibration or taste-matching; the result is not uniform across datasets or designs, reported as found (\S\ref{sec:results}).
+Two fully parallel projects predict a person's rating of a film from other raters: critic pseudo-users on Rotten Tomatoes (301 test critics, 43{,}344 paired episodes) and real members on Letterboxd (300 test members, 41{,}058 paired episodes). Raters are partitioned 70/15/15 into train/validation/test first, and pseudo-profiles are then amplified within each partition into one cached, seeded training pool per project (\S\ref{sec:protocol}), so no test rater's ratings ever reach training. Three designs compete on identical held-out episodes in each project: an analytic movie-mean-centered formula (with a second variant restricted to the 10 most-aligned-or-anti-aligned peers), an XGBoost regressor, and a residual neural-network ensemble -- all sharing one engineered feature contract that includes, beyond similarity and consensus, real content-based affinity features joined from the gsimonx37/letterboxd Kaggle metadata dump: a user-relative z-scored affinity per genre, a sentence-embedding theme-similarity estimate, per-actor affinity (by rating and by viewing count) with cast-overlap statistics, and per-director affinity (\S\ref{sec:features-eq}). On Rotten Tomatoes, full-history RMSE is 0.801 (Design 1), 0.783 (XGBoost), 0.789 (neural net), all beating the 0.843--0.853 flat baselines. On Letterboxd, full-history RMSE is 1.502, 1.417, 1.418 against a 1.654 flat baseline. Every design also trains a parallel z-score track (each rater standardized to their own scale, predicting pure deviation, converted back before scoring) to test whether the gain is calibration or taste-matching; the result is not uniform across datasets or designs, reported as found (\S\ref{sec:results}).
 \end{abstract}
 
 \section{Data}
@@ -67,14 +67,14 @@ z_{c,i}=\frac{r_{c,i}-\mu_c}{\sigma_c}.
 \end{equation}
 Here $r_{c,i}$ is critic $c$'s standardized raw score for movie $i$; $\mu_c$ is critic $c$'s all-time mean score; and $\sigma_c$ is critic $c$'s all-time standard deviation. The \emph{Tomatometer} is the percentage of reviews labelled Fresh, not a mean 0--5 rating; baseline B2 fits $t_m=aT_m+b$ (a linear calibration of movie $m$'s Tomatometer percentage onto the raw score scale).
 
-\textbf{Movie facets.} RT's own \texttt{genre} column is a comma-separated multi-genre string, parsed in full (not just the first entry). This is joined to the gsimonx37/letterboxd Kaggle metadata dump (\texttt{genres}, \texttt{themes}, \texttt{studios}, \texttt{actors}, \texttt{crew}, \texttt{countries}, \texttt{languages} -- posters excluded, unneeded) by normalized (title, year), with title-only fallback when a year is missing (RT's own release-date field is populated for only 30{,}512 of 142{,}052 movies). The join matches \textbf{69.2\%} of RT's full movie catalog and \textbf{99.3\%} of the 1{,}000-film app catalog (popular films skew toward better metadata coverage); unmatched films fall back to RT's own genre string and empty facets elsewhere, reported honestly rather than assumed complete.
+\textbf{Movie facets.} RT's own \texttt{genre} column is a comma-separated multi-genre string, parsed in full (not just the first entry). This is joined to the gsimonx37/letterboxd Kaggle metadata dump (\texttt{genres}, \texttt{themes}, \texttt{actors}, \texttt{crew}, \texttt{languages} -- \texttt{studios}/\texttt{countries} are downloaded but not used, and posters are excluded entirely) by normalized (title, year), with title-only fallback when a year is missing (RT's own release-date field is populated for only 30{,}512 of 142{,}052 movies). Five facets survive into the feature contract: genre, theme, language, director, and actor (the 20 most-billed actors per film -- see \S\ref{sec:features-eq}); decade and studio/country are excluded, decade because \texttt{year} already carries that signal and studio/country because they cost more columns than they were worth. The join matches \textbf{69.2\%} of RT's full movie catalog and \textbf{99.3\%} of the 1{,}000-film app catalog (popular films skew toward better metadata coverage); unmatched films fall back to RT's own genre string and empty facets elsewhere, reported honestly rather than assumed complete. Rating-weighted across all scored reviews (i.e. weighting each film's coverage by how often it was actually rated, not by raw film count), \textbf{67.2\%} of reviewed films have at least one theme and \textbf{82.3\%} have at least one credited actor; among films with only 3 or more raters, theme coverage drops to \textbf{36.2\%} -- the theme affinity feature (\S\ref{sec:features-eq}) is \texttt{NaN} whenever neither the target nor any seen film has themes.
 
 \subsection{Letterboxd}
 \label{sec:data-lb}
 
 To test whether real, dense per-user rating histories beat the sparse critic pseudo-users above, a fully parallel second project was built on Letterboxd community ratings (Kaggle, \textasciitilde11.08M ratings), isolated in its own directory tree (\texttt{src/letterboxd/}, \texttt{data/letterboxd/}, \texttt{results/letterboxd/}) sharing no data, models, or code with Rotten Tomatoes. The export yields 7{,}420 members with at least five rated films across 286{,}069 films -- 11{,}078{,}045 ratings total. Ratings are native on a 1--10 scale (no score parsing, no Tomatometer feature).
 
-The same gsimonx37 join is repeated independently (title, year; LB's own \texttt{movie\_id} slug already encodes the year, so the join is more reliable here) and matches \textbf{94.3\%} of LB's full catalog and \textbf{99.8\%} of the 1{,}000-film app catalog. LB's own \texttt{genres} column (a JSON list, already multi-genre) is the fallback when gsimonx37 misses.
+The same gsimonx37 join is repeated independently (title, year; LB's own \texttt{movie\_id} slug already encodes the year, so the join is more reliable here) and matches \textbf{94.3\%} of LB's full catalog and \textbf{99.8\%} of the 1{,}000-film app catalog. LB's own \texttt{genres} column (a JSON list, already multi-genre) is the fallback when gsimonx37 misses. Coverage is denser here than on RT (LB's join is more reliable, and its raters skew toward well-catalogued films): rating-weighted, \textbf{78.8\%} of rated films have at least one theme and \textbf{96.4\%} have at least one credited actor; among films with only 3 or more raters, theme coverage is \textbf{15.4\%}.
 
 \section{Equations and concepts}
 \label{sec:concepts}
@@ -120,30 +120,45 @@ C_m^{(k)}=\operatorname*{arg\,top\text{-}k}_{c\in C_m}\ |s_{u,c}|,
 \end{equation}
 where $\bar r_m^{(k)}$ is the mean over the restricted set $C_m^{(k)}$. Equation~\ref{eq:topk} is otherwise identical to Equation~\ref{eq:prediction} -- same shrinkage, same magnitude term -- just over a smaller, alignment-selected neighbourhood. The original full-neighbourhood formula is unchanged and remains the default; the top-$|$sim$|$ variant is purely additive, computed identically for both datasets.
 
-\subsection{Decile features}
+\subsection{Feature engineering}
+\label{sec:features-eq}
 
-For the trained designs, each peer's target-movie deviation is its leave-one-out all-time mean subtracted from its target score. Peers are ranked by $s_{u,c}$ and their $s_{u,c}\times\text{deviation}$ products are summarized (mean, count, standard deviation) in ten similarity-ranked deciles -- 30 columns, identical construction for both datasets and both raw/z tracks.
+Every trained design (Design 2 and 3) sees the same fixed-width row, built once here and consumed identically by both. It has four parts: a peer-similarity summary, target-side scalars, user-relative content affinities (the focus of this section), and target-side metadata.
 
-\subsection{Movie-facet affinity}
-\label{sec:facet-eq}
+\textbf{Decile summary (30 columns).} Each peer's target-movie deviation is its leave-one-out all-time mean subtracted from its target score. Peers are ranked by $s_{u,c}$ and their $s_{u,c}\times\text{deviation}$ products are summarized (mean, count, standard deviation) in ten similarity-ranked deciles -- identical construction for both datasets and both raw/z tracks.
 
-Beyond similarity, every trained design sees a rich per-facet contract built from the gsimonx37 join (\S\ref{sec:data-rt}, \S\ref{sec:data-lb}). For each of eight facets $f\in\{$genre, decade, theme, language, country, studio, director, actor$\}$, let $F_f(i)$ be movie $i$'s set of values for that facet (e.g. $F_{\text{genre}}(i)=\{\text{Drama},\text{Thriller}\}$). For a seen-set $S$ (with per-film deviations $d_i$ -- $d_i=r_{u,i}-\bar r_u$ on the raw track, or the seen z-value on the z-track, see \S\ref{sec:zscore-concept}) and target $m$:
+\textbf{Target-side scalars (7/6 columns).} Seen count, mean/max peer overlap, peer count, the target's rating dispersion across all its raters, mapped Tomatometer (RT only), and the user's own mean rating. No single-genre ordinal is included: the 40-column genre affinity block below covers every genre a film has (not just its first), so a separate \texttt{genre\_id} column would be redundant.
+
+\textbf{Content affinities (77 columns).} Built from the gsimonx37 movie-facet join (\S\ref{sec:data-rt}, \S\ref{sec:data-lb}). A design note on why these are per-value blocks rather than a coarser ``mean deviation over any shared facet value'' aggregate: the aggregate form cannot distinguish a film matching the target on two facet values from one matching on one, and its zero-count case is ambiguous between ``no shared value'' and ``target has no data for this facet.'' Each block instead computes, per user-relative quantity, a genuine estimate of how the user has rated similar content before, always paired with a confidence count that doubles as its own missingness indicator (a NaN average's paired count is always exactly 0 or, for genre, at most 1 -- see below). Let $\mu_u,\sigma_u$ be the mean and standard deviation of the user's own seen-set ratings for this episode (raw track: the actual seen ratings; z-track: the already-standardized per-episode z-values, so $\mu_u\approx0,\sigma_u\approx1$ there by construction); when $\sigma_u<10^{-9}$ (a seen set with no rating variance, most often $n=1$), $\sigma_u$ falls back to $\sigma_{\text{global}}$, the standard deviation of every rating in the dataset.
+
+\emph{Genre (40 columns).} Let $G$ be the canonical genre vocabulary -- the 19 named gsimonx37 genres plus one \texttt{"\_\_other\_\_"} slot, so $|G|=20$ regardless of catalog. For genre $g\in G$ and seen set $S$ with per-film ratings $r_i$:
 \begin{equation}
-\mathrm{dev}_f(u,m)=\begin{cases}
-\dfrac{1}{|H_f|}\sum_{i\in H_f} d_i & H_f\neq\varnothing\\[4pt]
-0 & H_f=\varnothing
-\end{cases},
-\qquad
-H_f=\{i\in S: F_f(i)\cap F_f(m)\neq\varnothing\},
-\label{eq:facetdev}
+z_g(u,m)=\frac{\bar r_{H_g}-\mu_u}{\sigma_u},\qquad H_g=\{i\in S: g\in F_{\text{genre}}(i)\},
+\label{eq:genrez}
 \end{equation}
+undefined (\texttt{NaN}) when $H_g=\varnothing$; $\bar r_{H_g}$ is the mean seen rating over $H_g$. The paired count \emph{includes the target film itself}:
 \begin{equation}
-\mathrm{cnt}_f(u,m)=\log(1+|H_f|).
-\label{eq:facetcnt}
+\mathrm{cnt}_g(u,m)=\log\!\bigl(1+|H_g|+\mathbb{1}[g\in F_{\text{genre}}(m)]\bigr).
+\label{eq:genrecnt}
 \end{equation}
-$\mathrm{dev}_f$ is the personalization signal: does this user's seen history over- or under-rate films sharing facet $f$ with the target? It is built \emph{only from seen films} ($H_f\subseteq S$), so it is leakage-free by construction -- the target's own rating is never consulted. $\mathrm{cnt}_f$ is a confidence weight (how many seen films actually informed $\mathrm{dev}_f$). Sixteen columns (one dev/cnt pair per facet) are added for both projects identically.
+This single count column replaces a separate target-side multi-hot entirely: $\mathrm{cnt}_g=0$ means the target isn't genre $g$; $\mathrm{cnt}_g=\log 1$ (i.e. the $+1$ alone) means the target is genre $g$ but the user has seen none; $\mathrm{cnt}_g=\log(1+n)$ for $n\geq1$ seen films means both. It is target-side information only ($\mathbb{1}[g\in F_{\text{genre}}(m)]$ needs no rating), so it adds no leakage.
 
-The two lowest-cardinality facets, genre and decade, additionally get a target-side multi-hot descriptor -- a fixed-width one-hot-style vector over a top-$K$ vocabulary (genre: $K=30$; decade: $K=20$; the $(K{+}1)^{\text{th}}$ slot is a catch-all ``other'') -- so the trained models can also learn a global base-rate effect (``comedies score higher on average''), not just the personalization term. The remaining six higher-cardinality facets (theme, language, country, studio, director, actor) rely on the affinity pair alone: a one-hot over thousands of distinct studios or actors would be an unmanageable, overfitting-prone width for a catalog this size, while the affinity term already carries the useful personalization signal regardless of cardinality. A small numeric tail -- $\log(1+\text{runtime})$, the gsimonx37 dataset's own average member rating for that film, and $\log(1+n_{\text{themes/languages/countries}})$ -- completes the contract. In total the feature row grows from 38 (RT, with Tomatometer) / 37 (LB) columns to 111 / 110.
+\emph{Theme (3 columns).} The 109 gsimonx37 theme phrases are short descriptive English sentences (e.g. \emph{``Gothic and eerie haunting horror,''} \emph{``Terrifying, haunted, and supernatural horror''}) -- similar in meaning but sharing no facet string, so a set-overlap affinity (as genre/director/actor use) would miss the relationship entirely. Each phrase is instead encoded once, offline, with a sentence-transformer (\texttt{all-MiniLM-L6-v2}, L2-normalized), giving a $109\times109$ cosine similarity matrix computed a single time and cached (seconds on CPU); the two horror phrases above cosine at $0.79$, against $0.21$--$0.27$ to an unrelated theme -- concrete evidence the embedding captures what string matching cannot. For target themes $T_m$ and a seen film $i$ with themes $T_i$, define $w(t,i)=\max_{\tau\in T_i}\cos(e_t,e_\tau)$ for $t\in T_m$ (0 if $T_i=\varnothing$). The theme feature is a similarity-weighted average of the \emph{raw} seen rating (not a deviation -- it is a kernel-smoothed rating estimate over the theme graph, meant to be directly comparable to the prediction target):
+\begin{equation}
+\mathrm{avg}_\theta(u,m)=\frac{\sum_{t\in T_m}\sum_{i\in S} w(t,i)\,r_i}{\sum_{t\in T_m}\sum_{i\in S} w(t,i)},
+\label{eq:themeavg}
+\end{equation}
+undefined when $T_m=\varnothing$ or the denominator is 0. (This is algebraically the mass-weighted combination of each theme's own weighted average -- the per-theme intermediate cancels.) The mass itself, $\log(1+\sum_{t,i}w(t,i))$, is the confidence companion and the exact mask for Equation~\ref{eq:themeavg} (zero iff the average is NaN); a third column counts (log1p) seen films with $\max_{t\in T_m} w(t,i)>0.8$, i.e. strongly on-theme.
+
+\emph{Actor (30 columns).} Cast depth is the 20 most-billed actors per film -- deep enough that cast-overlap statistics carry signal (the gsimonx37 dump's median cast is 6, 90th percentile 20; a 2--3-actor cast would make overlap nearly always empty). Three top-5 rankings of the target's cast against the user's seen history: (i) by the user's mean rating for that actor, tie-broken by count; (ii) by the user's viewing count for that actor, tie-broken by mean rating; (iii) seen films ranked by shared-cast count with the target, keeping each film's own raw rating (a single observation, not averaged -- \texttt{user\_mean} already carries the user's general level). Each ranking contributes a z-score/rating and a log1p count per rank; unused ranks (fewer than 5 matching actors/films) are padded with \texttt{NaN} (z-scores and ratings) and 0 (counts).
+
+\emph{Director (2 columns).} One z-score and one log1p(count), identical construction to genre/actor, over seen films sharing any director with the target (no target-inclusive count here -- directors are near-unique per film, so the genre trick's leakage-free target bit adds little).
+
+\textbf{Numeric tail (4/4 columns).} $\log(1+\text{runtime})$, the gsimonx37 dataset's own average site rating for the film, and $\log(1+n_{\text{themes}})$, $\log(1+n_{\text{languages}})$.
+
+\textbf{Missing-value convention.} XGBoost splits on \texttt{NaN} natively (missing-value direction), so it needs no imputation. The neural network cannot use \texttt{NaN} directly, so every \texttt{NaN}-able column is imputed with a fixed sentinel before standardization: rating-scale averages (theme average, cast-overlap ratings) get $-1$ (impossible on both the 0--5 and 1--10 scales); z-scores get $0$ (their own neutral point -- ``no evidence'' and ``exactly average'' are deliberately not distinguished further, since the paired count already grades how much evidence there is). No separate missingness mask is used: every \texttt{NaN}-able column already has a count companion that \emph{is} its mask, and the count does more than flag absence -- it grades how weak the evidence is, so zero, one, and two prior observations fall in one smoothly learnable region rather than requiring a hard binary split.
+
+In total the feature row has \textbf{116} columns on Rotten Tomatoes (with Tomatometer) and \textbf{115} on Letterboxd.
 
 \subsection{The z-score track}
 \label{sec:zscore-concept}
@@ -158,7 +173,18 @@ The model predicts pure deviation $\hat z$ in this mixed z-space, then converts 
 \hat r = \operatorname{clip}\!\left(\mu_u + \sigma_u\hat z,\ \text{range}\right).
 \label{eq:convertback}
 \end{equation}
-$\mathrm{user\_mean}\approx0$ by construction on this track (the level was removed), and the facet-affinity deviations $d_i$ in Equation~\ref{eq:facetdev} use $z_{u,i}$ directly (already $\approx0$-mean) instead of $r_{u,i}-\bar r_u$. RMSE is always reported after Equation~\ref{eq:convertback}, so raw-track and z-track numbers are directly comparable (\S\ref{sec:zscore-results}). An episode is skipped on the z-track only if its seen ratings have zero variance ($\sigma_u=0$, can't standardize).
+$\mathrm{user\_mean}\approx0$ by construction on this track (the level was removed), and the content-affinity blocks (\S\ref{sec:features-eq}) use $z_{u,i}$ directly as the seen-set "rating" they average over -- already $\approx0$-mean, $\approx1$-std, so those blocks are already scale-free on this track without any extra transformation. RMSE is always reported after Equation~\ref{eq:convertback}, so raw-track and z-track numbers are directly comparable (\S\ref{sec:zscore-results}). An episode is skipped on the z-track only if its seen ratings have zero variance ($\sigma_u=0$, can't standardize).
+
+\subsection{Sampling protocol and the training pool}
+\label{sec:protocol}
+
+\textbf{Split first, then amplify.} Every rater (critic on Rotten Tomatoes, member on Letterboxd) is assigned to exactly one of train/validation/test by a deterministic seeded shuffle -- \textbf{70\,/\,15\,/\,15} in both projects. On Rotten Tomatoes the 2{,}894 pseudo-user critics split 2{,}026\,/\,434\,/\,434; on Letterboxd the 7{,}409 eligible members ($\geq$6 ratings) split 5{,}186\,/\,1{,}111\,/\,1{,}112. All pseudo-profile sampling happens \emph{within} a partition, so every profile derived from one rater stays in that rater's split: no rating belonging to a test rater is ever visible at training time.
+
+\textbf{Pseudo-profile amplification.} A single rater with a long history supports many distinct training examples: an episode fixes one held-out target film and samples $n$ of the rater's remaining films as the ``seen'' set. Training and validation rows draw, per rater, several independent random profiles at every seen-count in the evaluation grid $n\in\{3,5,10,20,50,\text{all}\}$ (32 train / 8 validation profiles per $n$ on Rotten Tomatoes; 4 / 2 on Letterboxd, whose raters are $\sim$2.5$\times$ more numerous and far denser). Every rater draws from its own RNG stream, seeded as \texttt{default\_rng([seed, rater\_position])} -- independent of processing order and worker count, so the pool is bit-for-bit reproducible whether generated serially or across processes.
+
+\textbf{One cached pool, shared by both trained designs.} The full pool -- training, validation, and paired test rows, in both the raw and z-score tracks -- is generated once by a dedicated pipeline stage (\texttt{build\_rows}, \texttt{make rt-rows}\,/\,\texttt{lb-rows}) and cached to parquet with a manifest recording the seed and a hash of the feature contract. XGBoost and the neural network both load this cache, so the two trained designs fit on byte-identical rows and are scored on byte-identical test episodes; a stale cache (changed contract or seed) is refused rather than silently regenerated. The pool sizes: 358{,}080 training rows per track on Rotten Tomatoes and $\sim$125{,}000 on Letterboxd (every train member contributes, capped only by each member's own history length). A raw-track row and its z-track twin are built from the \emph{same} sampled episode, and an episode is dropped from both tracks if either row is unavailable, keeping the tracks 1:1 comparable.
+
+\textbf{Paired, nested test episodes.} Test raters are evaluated on the shared paired protocol (\S\ref{sec:design1}--\ref{sec:design3}): per eligible test rater (more than 50 rated films), 8 fixed targets $\times$ 3 popularity-weighted seen-order redraws, with the seen set at count $n$ a nested prefix of the same order -- so every seen-count, every design, and every baseline is scored on an identical (rater, target, draw) set.
 
 \subsection{Metrics}
 
@@ -185,7 +211,7 @@ Both the full-neighbourhood and top-$|$sim$|$ formulas are recomputed against th
 
 \subsection{Raw}
 
-An XGBoost regressor (native Booster API) over the full 111/110-column feature row (\S\ref{sec:concepts}): the 30 decile columns, seen-count/overlap/dispersion/reviewer-count, mapped Tomatometer (RT only), the 8 facet-affinity dev/cnt pairs, the 51/41-column genre+decade multi-hot, and the numeric tail. \texttt{genre\_id} (RT's own single-genre embedding index, kept for continuity with Design 3) enters as a plain ordinal column; missing Tomatometer values are handled natively by XGBoost's missing-value split direction. Trained with early stopping on validation RMSE.
+An XGBoost regressor (scikit-learn estimator API, \texttt{XGBRegressor}) over the full 116/115-column feature row (\S\ref{sec:features-eq}): the 30 decile columns, seen-count/overlap/dispersion/reviewer-count, mapped Tomatometer (RT only), the 40-column genre block, the 3-column theme block, the 30-column actor block, the 2-column director block, and the 4-column numeric tail. Missing Tomatometer and every \texttt{NaN}-able affinity column are handled natively by XGBoost's missing-value split direction. Trained with early stopping on validation RMSE. Both tracks are trained as regressors rather than multiclass classifiers, even though the raw targets fall on a discrete grid (0--5 on Rotten Tomatoes, 1--10 on Letterboxd): the z-score track's target is continuous by construction, and the reported metric is RMSE on the original scale, which rewards ordered, interpolating predictions -- a multiclass objective would treat every misclassification as equally wrong regardless of how far off it is.
 
 \subsection{Z-score}
 
@@ -196,7 +222,7 @@ A second XGBoost model is trained on the identical feature contract, but every p
 
 \subsection{Raw}
 
-A residual MLP ensemble in PyTorch (Apple GPU/MPS), architecturally identical for both datasets: the 110/109 non-genre-embedding numeric columns (log1p-compressed where they are counts, NaN-imputed and standardized on train statistics) and a 24-dimensional genre embedding (\texttt{genre\_id}) feed a projection into six pre-activation residual blocks of width 512 ($\approx$3.25M weights; batch-norm, GELU, dropout), then a linear head. Trained with AdamW, ReduceLROnPlateau, and early stopping; three independently seeded networks are averaged into an ensemble. Both trained models are verified leakage-free: peer means are leave-one-out, $u$/the visitor is excluded everywhere, and the facet-affinity term (Equation~\ref{eq:facetdev}) is built only from seen films.
+A residual MLP ensemble in PyTorch (Apple GPU/MPS), architecturally identical for both datasets: the full 116/115 numeric columns -- no separate genre embedding, since the 40-column genre affinity block already gives the network richer per-genre information (every genre a film has, not just a single first-genre id) than an embedding lookup would -- log1p-compressed where they are counts, NaN-imputed with the fixed per-column sentinel of \S\ref{sec:features-eq} (not the column mean, so a missing affinity always lands at the same point regardless of what a given split's training rows happened to average), and standardized on train statistics, feed a projection directly into six pre-activation residual blocks of width 512 (3{,}238{,}353 weights per ensemble member; batch-norm, GELU, dropout), then a linear head. Trained with AdamW, ReduceLROnPlateau, and early stopping; three independently seeded networks are averaged into an ensemble. Both trained models are verified leakage-free: peer means are leave-one-out, $u$/the visitor is excluded everywhere, and every content-affinity block (\S\ref{sec:features-eq}) is built only from seen films.
 
 \subsection{Z-score}
 
@@ -214,17 +240,17 @@ A second ensemble, identical architecture, trained on the z-Split's rows with ta
 \toprule
 \textbf{Seen ratings $n$} & 3 & 5 & 10 & 20 & 50 & all \\
 \midrule
-B1 global mean & 1.049 & 1.049 & 1.049 & 1.049 & 1.049 & 1.049 \\
-B2 Tomatometer $\to$ score & 0.830 & 0.830 & 0.830 & 0.830 & 0.830 & 0.830 \\
-B3 reviewer mean & 0.826 & 0.826 & 0.826 & 0.826 & 0.826 & 0.826 \\
-B4 top-10 similar mean & 0.908 & 0.896 & 0.881 & 0.865 & 0.856 & 0.845 \\
-Design 1 (full) & 0.964 & 0.922 & 0.864 & 0.833 & 0.811 & \textbf{0.796} \\
-Design 1 (top-$|$sim$|$) & 0.989 & 0.948 & 0.889 & 0.858 & 0.828 & 0.808 \\
-Design 2 XGBoost & 0.809 & 0.799 & 0.792 & 0.784 & 0.777 & \textbf{0.770} \\
-Design 3 neural net & 0.813 & 0.801 & 0.793 & 0.785 & 0.778 & \textbf{0.776} \\
+B1 global mean & 1.072 & 1.072 & 1.072 & 1.072 & 1.072 & 1.072 \\
+B2 Tomatometer $\to$ score & 0.853 & 0.853 & 0.853 & 0.853 & 0.853 & 0.853 \\
+B3 reviewer mean & 0.843 & 0.843 & 0.843 & 0.843 & 0.843 & 0.843 \\
+B4 top-10 similar mean & 0.917 & 0.906 & 0.893 & 0.880 & 0.872 & 0.858 \\
+Design 1 (full) & 0.971 & 0.923 & 0.874 & 0.844 & 0.812 & \textbf{0.801} \\
+Design 1 (top-$|$sim$|$) & 0.993 & 0.948 & 0.902 & 0.864 & 0.835 & 0.811 \\
+Design 2 XGBoost & 0.830 & 0.822 & 0.812 & 0.804 & 0.793 & \textbf{0.783} \\
+Design 3 neural net & 0.831 & 0.823 & 0.815 & 0.805 & 0.794 & \textbf{0.789} \\
 \bottomrule
 \end{tabular}
-\caption{RMSE on the 43{,}344 paired, nested episodes (301 test critics, 2{,}894 pseudo-users total). Baselines are flat because they do not depend on the seen set.}
+\caption{RMSE on the 43{,}344 paired, nested episodes (301 eligible test critics with more than 50 rated films, out of the 434-critic test partition; 2{,}894 pseudo-users total). The trained designs are scored on the 42{,}393-episode subset where the z-track row also exists, keeping the two tracks 1:1 comparable. Baselines are flat because they do not depend on the seen set.}
 \label{tab:nsweep}
 \end{table}
 
@@ -235,7 +261,7 @@ Design 3 neural net & 0.813 & 0.801 & 0.793 & 0.785 & 0.778 & \textbf{0.776} \\
 \label{fig:plotA}
 \end{figure}
 
-Design 1 improves over B3 by 3.6\% at full history; the trained models win everywhere: XGBoost overall/full-history RMSE 0.788/0.770, the neural net 0.791/0.776. The new top-$|$sim$|$ variant of Design 1 trails the full-neighbourhood formula slightly at every seen-count (0.808 vs.\ 0.796 full-history) -- restricting to 10 alignment-selected peers discards useful information the full weighted sum still captures, an honest negative result for that variant. Across low/mid/high critic-disagreement terciles, full-history gain over B2 is $+5.7/+6.2/+1.5\%$ for Design 1, $+7.8/+8.1/+6.2\%$ for XGBoost, $+7.2/+7.1/+5.6\%$ for the neural net.
+Design 1 improves over B3 by 5.0\% at full history; the trained models win everywhere: XGBoost overall/full-history RMSE 0.807/0.783, the neural net 0.809/0.789. The top-$|$sim$|$ variant of Design 1 trails the full-neighbourhood formula slightly at every seen-count (0.811 vs.\ 0.801 full-history) -- restricting to 10 alignment-selected peers discards useful information the full weighted sum still captures, an honest negative result for that variant. Across low/mid/high critic-disagreement terciles, full-history gain over B2 is $+8.3/+7.5/+3.9\%$ for Design 1, $+10.2/+8.2/+7.3\%$ for XGBoost, $+11.2/+7.4/+5.6\%$ for the neural net.
 
 \begin{table}[h]
 \centering
@@ -264,7 +290,7 @@ Magnitude matching supplies the entire improvement over the consensus; the signe
 \end{figure}
 
 \label{sec:design2-imp}
-Both trained models still lean first on the movie's Tomatometer/consensus, then the user's mean; scaling the network wider, deeper, and on more data moved the loss by nothing in earlier iterations of this experiment, and the newly added movie-facet features (\S\ref{sec:facet-eq}) improved XGBoost's full-history RMSE only modestly (0.775$\to$0.770) -- on this engineered tabular feature set the ceiling is set by the information in the features, not model capacity, and facet-level personalization is a small effect on top of calibration, not a replacement for it.
+Both trained models lean first on the movie's Tomatometer/consensus, then the user's mean; scaling the network wider, deeper, and on more data moved the loss by nothing in earlier iterations of this experiment, and ablations that repackage the same information (a coarser facet-overlap scheme in place of the per-genre/theme/actor/director affinity blocks of \S\ref{sec:features-eq}) shifted full-history RMSE by well under 0.01 -- on this engineered tabular feature set the ceiling is set by the information in the features, not model capacity or how that information is packaged, and content-level personalization remains a small effect on top of calibration, not a replacement for it. The affinity features are feature-importance-visible, however: the top-ranked XGBoost columns include individual genre and actor affinities rather than only consensus and user-level scalars, giving an interpretable picture of what the model actually leans on (\texttt{results/rotten\_tomatoes/tables/design2\_feature\_importance.csv}).
 
 \subsection{Letterboxd}
 
@@ -275,16 +301,16 @@ Both trained models still lean first on the movie's Tomatometer/consensus, then 
 \toprule
 \textbf{Seen ratings $n$} & 3 & 5 & 10 & 20 & 50 & all \\
 \midrule
-B1 global mean & 2.108 & 2.108 & 2.108 & 2.108 & 2.108 & 2.108 \\
-B3 mean of all members & 1.639 & 1.639 & 1.639 & 1.639 & 1.639 & 1.639 \\
-B4 top-10 similar mean & 1.705 & 1.686 & 1.670 & 1.653 & 1.657 & 1.622 \\
-Design 1 (full) & 1.765 & 1.670 & 1.597 & 1.561 & 1.545 & \textbf{1.507} \\
-Design 1 (top-$|$sim$|$) & 1.836 & 1.738 & 1.649 & 1.592 & 1.573 & 1.526 \\
-Design 2 XGBoost & 1.626 & 1.595 & 1.566 & 1.535 & 1.503 & \textbf{1.455} \\
-Design 3 neural net & 1.642 & 1.610 & 1.581 & 1.538 & 1.515 & \textbf{1.468} \\
+B1 global mean & 2.104 & 2.104 & 2.104 & 2.104 & 2.104 & 2.104 \\
+B3 mean of all members & 1.654 & 1.654 & 1.654 & 1.654 & 1.654 & 1.654 \\
+B4 top-10 similar mean & 1.710 & 1.716 & 1.680 & 1.671 & 1.654 & 1.614 \\
+Design 1 (full) & 1.715 & 1.648 & 1.575 & 1.545 & 1.527 & \textbf{1.502} \\
+Design 1 (top-$|$sim$|$) & 1.806 & 1.723 & 1.633 & 1.591 & 1.553 & \textbf{1.501} \\
+Design 2 XGBoost & 1.611 & 1.586 & 1.548 & 1.521 & 1.480 & \textbf{1.417} \\
+Design 3 neural net & 1.610 & 1.579 & 1.541 & 1.518 & 1.494 & \textbf{1.418} \\
 \bottomrule
 \end{tabular}
-\caption{Letterboxd RMSE (1--10 scale) on the same paired, nested seen-history protocol: 300 deterministic test members, 8 fixed targets each, 3 seen-order redraws (41{,}166 episodes).}
+\caption{Letterboxd RMSE (1--10 scale) on the same paired, nested seen-history protocol: 300 deterministic test members, 8 fixed targets each, 3 seen-order redraws (41{,}058 episodes).}
 \label{tab:lb-nsweep}
 \end{table}
 
@@ -295,9 +321,9 @@ Design 3 neural net & 1.642 & 1.610 & 1.581 & 1.538 & 1.515 & \textbf{1.468} \\
 \label{fig:lb-plotA}
 \end{figure}
 
-Design 1's top-$|$sim$|$ variant trails the full formula here too (1.526 vs.\ 1.507 full-history) -- the same honest result as Rotten Tomatoes, restricting the neighbourhood costs more than alignment-selection gains. XGBoost is now the best full-history method on Letterboxd (1.455, improved from an earlier 1.502 pre-facet-feature baseline), narrowly ahead of the neural net (1.468).
+Design 1's top-$|$sim$|$ variant lands in a statistical dead heat with the full formula at full history here (1.501 vs.\ 1.502) while trailing it at every finite seen-count -- a more favourable showing than on Rotten Tomatoes, where the full formula stays ahead throughout, but still no positive case for restricting the neighbourhood. The trained models are effectively tied for best full-history method on Letterboxd (XGBoost 1.417, neural net 1.418), consistent with \S\ref{sec:design2-imp}'s finding that beyond calibration and consensus the two very different model families extract the same information from this feature contract.
 
-\textbf{Honest cross-dataset finding.} Normalizing by rating range (RMSE~/~(max$-$min)) puts the two 0--5 and 1--10 scales on the same footing. Rotten Tomatoes' normalized RMSE is 0.159/0.162/0.154/0.155 (Design 1 full / Design 1 top-$|$sim$|$ / XGBoost / neural net); Letterboxd's is 0.167/0.170/0.162/0.163. The two remain \emph{comparable}, with Rotten Tomatoes still marginally \emph{better} normalized despite training on far sparser critic pseudo-user profiles than Letterboxd's dense real member histories -- more real rating data did not translate into a lower normalized error here, even with the richer movie-facet features added to both. Full numbers are in \texttt{results/letterboxd/cross\_dataset\_comparison.csv}.
+\textbf{Honest cross-dataset finding.} Normalizing by rating range (RMSE~/~(max$-$min)) puts the two 0--5 and 1--10 scales on the same footing. Rotten Tomatoes' normalized RMSE is 0.160/0.162/0.157/0.158 (Design 1 full / Design 1 top-$|$sim$|$ / XGBoost / neural net); Letterboxd's is 0.167/0.167/0.157/0.158. The trained models land at essentially \emph{identical} normalized error on both datasets, and the analytic formula normalizes marginally better on Rotten Tomatoes despite its far sparser critic pseudo-user profiles -- Letterboxd's dense real member histories did not translate into a lower normalized error anywhere, even with the content-affinity features (\S\ref{sec:features-eq}) available to both. Full numbers are in \texttt{results/letterboxd/cross\_dataset\_comparison.csv}.
 
 \subsection{Isolating scale: the z-score track}
 \label{sec:zscore-results}
@@ -310,15 +336,15 @@ Design 1's top-$|$sim$|$ variant trails the full formula here too (1.526 vs.\ 1.
 \textbf{Design} & \textbf{raw RMSE} & \textbf{z RMSE (converted back)} & \textbf{z $-$ raw} \\
 \midrule
 \multicolumn{4}{l}{\emph{Rotten Tomatoes (0--5)}} \\
-Design 1 (full) & 0.796 & 0.926 & $+$0.130 \\
-Design 1 (top-$|$sim$|$) & 0.808 & 0.817 & $+$0.009 \\
-Design 2 XGBoost & 0.770 & 0.778 & $+$0.008 \\
-Design 3 neural net & 0.776 & 0.781 & $+$0.005 \\
+Design 1 (full) & 0.801 & 0.948 & $+$0.147 \\
+Design 1 (top-$|$sim$|$) & 0.811 & 0.844 & $+$0.032 \\
+Design 2 XGBoost & 0.783 & 0.792 & $+$0.010 \\
+Design 3 neural net & 0.789 & 0.793 & $+$0.003 \\
 \multicolumn{4}{l}{\emph{Letterboxd (1--10)}} \\
-Design 1 (full) & 1.507 & 1.640 & $+$0.134 \\
-Design 1 (top-$|$sim$|$) & 1.526 & 1.528 & $+$0.001 \\
-Design 2 XGBoost & 1.455 & 1.455 & $+$0.0004 \\
-Design 3 neural net & 1.468 & 1.464 & $-$0.004 \\
+Design 1 (full) & 1.502 & 1.607 & $+$0.105 \\
+Design 1 (top-$|$sim$|$) & 1.501 & 1.501 & $-$0.001 \\
+Design 2 XGBoost & 1.417 & 1.412 & $-$0.005 \\
+Design 3 neural net & 1.418 & 1.406 & $-$0.013 \\
 \bottomrule
 \end{tabular}
 \caption{Full-history RMSE, raw vs.\ z-score track, both reported on the raw scale.}
@@ -332,12 +358,12 @@ Design 3 neural net & 1.468 & 1.464 & $-$0.004 \\
 \label{fig:plotC}
 \end{figure}
 
-The result is \textbf{not uniform}, reported as found rather than presupposed. On Rotten Tomatoes the z-track trails raw at every design; the full-neighbourhood Design 1 loses the most ($+$0.130) since it has no learned capacity to reallocate, while the top-$|$sim$|$ variant and both trained models lose far less ($+$0.005 to $+$0.009). On Letterboxd, the trained models (Design 2/3) come out \emph{flat-to-slightly-better} in z-space, and even the top-$|$sim$|$ analytic variant is nearly indifferent ($+$0.001) -- only the full-neighbourhood formula still loses meaningfully. A plausible reading: restricting to the top-$|$sim$|$ peers, or handing a model spare learned capacity, both let the deviation-only signal be used more directly once the rater's own level is removed; the full-neighbourhood analytic formula never had that capacity to reallocate, so it only loses the calibration information without regaining anything. Either way, the effect is small relative to raw calibration's gain over the flat baselines (Table~\ref{tab:nsweep}, \ref{tab:lb-nsweep}) -- calibration, not taste-matching, remains the dominant effect in this data.
+The result is \textbf{not uniform}, reported as found rather than presupposed. On Rotten Tomatoes the z-track trails raw at every design; the full-neighbourhood Design 1 loses the most ($+$0.147) since it has no learned capacity to reallocate, while the trained models lose far less ($+$0.003 to $+$0.010). On Letterboxd, the trained models (Design 2/3) come out \emph{flat-to-slightly-better} in z-space, and the top-$|$sim$|$ analytic variant is indifferent ($-$0.001) -- only the full-neighbourhood formula still loses meaningfully ($+$0.105). A plausible reading: restricting to the top-$|$sim$|$ peers, or handing a model spare learned capacity, both let the deviation-only signal be used more directly once the rater's own level is removed; the full-neighbourhood analytic formula never had that capacity to reallocate, so it only loses the calibration information without regaining anything. Either way, the effect is small relative to raw calibration's gain over the flat baselines (Table~\ref{tab:nsweep}, \ref{tab:lb-nsweep}) -- calibration, not taste-matching, remains the dominant effect in this data.
 
 \section{Similar-film suggestions: does rating them help?}
 \label{sec:similar}
 
-Each row of the app's ``films to predict'' table offers a ``movies like this one'' dropdown: rate one of the target film's nearest content neighbours and the prediction should, in principle, improve. Neighbours are precomputed offline with K-means: a standardized feature vector per catalog film (the genre/decade multi-hot from \S\ref{sec:facet-eq}, a catalog-scoped top-$k$ multi-hot over studio/director/actor/theme/language/country, and numeric runtime/external-rating/year/consensus), clustered into $\max(2,\lfloor n/25\rfloor)$ groups, with each film's \texttt{k\_neighbors} nearest neighbours (Euclidean distance) taken from within its own cluster (topped up from the globally nearest remaining films if the cluster is too small). \texttt{k\_neighbors} is the dropdown's list length, identical on both datasets.
+Each row of the app's ``films to predict'' table offers a ``movies like this one'' dropdown: rate one of the target film's nearest content neighbours and the prediction should, in principle, improve. Neighbours are precomputed offline with K-means: a standardized feature vector per catalog film (the genre multi-hot from \S\ref{sec:features-eq}, a catalog-scoped top-$k$ multi-hot over director/actor/theme/language, and numeric runtime/external-rating/year/consensus), clustered into $\max(2,\lfloor n/25\rfloor)$ groups, with each film's \texttt{k\_neighbors} nearest neighbours (Euclidean distance) taken from within its own cluster (topped up from the globally nearest remaining films if the cluster is too small). \texttt{k\_neighbors} is the dropdown's list length, identical on both datasets. Studio/country/decade are excluded from this vector for the same reasons they are excluded from the model feature contract (\S\ref{sec:features-eq}).
 
 \textbf{Does it work?} 6{,}000 paired (rater, $n{=}10$ seen, target) episodes were drawn from each project's own 1{,}000-film catalog (Design 1, leave-one-out, identical protocol to \S\ref{sec:design1}) and bucketed by how many of the target's \texttt{k\_neighbors} nearest neighbours were already in that episode's seen set -- the same 6{,}000 predictions are reused for every \texttt{k\_neighbors} value, so only the bucketing (which films count as ``similar'') differs.
 
@@ -348,7 +374,7 @@ Each row of the app's ``films to predict'' table offers a ``movies like this one
 \label{fig:plotD}
 \end{figure}
 
-On \textbf{Rotten Tomatoes} the signal is present but noisy. At $k{=}20$ the per-bucket RMSE by similar-seen count is 1.136 (0 seen, $n{=}4{,}435$), 1.139 (1), 0.987 (2), 1.220 (3), 0.795 (4, $n{=}10$) -- a downward \emph{tendency} as more of the target's similar films are rated, but non-monotonic, and the higher-count buckets are thinly populated. Pooling every episode with at least three similar films seen and dropping buckets below five episodes gives the cleanest single summary: the episode-count-weighted average of those buckets' RMSE is 1.121 at $k{=}20$ ($n{=}43$), below $k{=}30$'s 1.525 ($n{=}99$) and $k{=}10$'s 3.966 ($n{=}7$, too thin to trust). On this modest evidence $k{=}20$ is the best-supported choice for Rotten Tomatoes.
+On \textbf{Rotten Tomatoes} there is \emph{no clean beneficial signal}. At $k{=}20$ the per-bucket RMSE by similar-seen count is 0.796 (0 seen, $n{=}4{,}570$), 0.772 (1, $n{=}1{,}196$), 0.869 (2, $n{=}193$), 0.924 (3, $n{=}35$), 0.830 (4, $n{=}6$) -- essentially flat from 0 to 1 seen, then \emph{rising} as more similar films are rated, the opposite of the hoped-for direction, though the higher-count buckets are thin enough (35 and 6 episodes) that little should be read into the exact shape. Pooling every bucket with at least three similar films seen (dropping buckets under five episodes) gives one summary per $k$: 0.910 at $k{=}20$ ($n{=}41$) and 0.900 at $k{=}30$ ($n{=}89$), both \emph{above} the 0-seen baseline for their own $k$ (0.796 and 0.799) -- rating more of a film's nearest neighbours did not measurably improve its prediction in this sample.
 
 \begin{figure}[h]
 \centering
@@ -357,24 +383,24 @@ On \textbf{Rotten Tomatoes} the signal is present but noisy. At $k{=}20$ the per
 \label{fig:lb-plotD}
 \end{figure}
 
-On \textbf{Letterboxd}, the same sweep is noisier: RMSE does not fall monotonically with similar-seen count for any \texttt{k\_neighbors}, and the mechanical ``lowest RMSE at $\geq$3 similar seen'' rule picks $k{=}10$ (0.622) -- but that bucket has only $n{=}6$ episodes, an order of magnitude thinner than Rotten Tomatoes' equivalent and not a result to trust. $k{=}20$'s own bucket (2.698, $n{=}18$) is more populated but still noisy, and $k{=}30$ (2.986, $n{=}45$) does not improve on it. \textbf{Reported honestly}: Letterboxd's own sweep does not cleanly discriminate among \texttt{k\_neighbors} values at this sample size, unlike Rotten Tomatoes' cleaner (if still modest) signal. \texttt{k\_neighbors}$=20$ was set for \emph{both} projects -- Rotten Tomatoes' larger, more reliable sample supports it outright, and Letterboxd's own data does not contradict it strongly enough to justify a different value per project. Full per-bucket numbers are in \texttt{results/\{rotten\_tomatoes,letterboxd\}/similar\_k\_sweep.csv} (\texttt{rotten\_tomatoes.design1\_analytic.similar\_k\_sweep} / \texttt{letterboxd.similar\_k\_sweep}).
+On \textbf{Letterboxd}, the sweep is noisier still and shows no signal either: at $k{=}20$, RMSE by similar-seen count is 1.589 (0, $n{=}4{,}651$), 1.555 (1, $n{=}1{,}183$), 1.565 (2, $n{=}143$), 1.682 (3, $n{=}16$), 2.006 (4, $n{=}4$) -- flat within noise up to 2 seen, then rising on buckets thin enough (16 and 4 episodes) to be unreliable. The pooled $\geq$3-similar-seen summary is 1.682 at $k{=}20$ ($n{=}16$, below the 5-episode floor for a trustworthy weighted average so reported as a single bucket) and 1.588 at $k{=}30$ ($n{=}53$) -- both indistinguishable from, or slightly above, the 0-seen baseline (1.589 and 1.598). \textbf{Reported honestly}: on both datasets, rating a target film's nearest content neighbours first does not measurably sharpen the prediction in this sample -- a negative result for the ``movies like this one'' hypothesis, not a confirmation. \texttt{k\_neighbors}$=20$ is kept as the dropdown length on both projects regardless, since it is a UI choice (how many suggestions to show) independent of this null predictive-value finding. Full per-bucket numbers are in \texttt{results/\{rotten\_tomatoes,letterboxd\}/similar\_k\_sweep.csv} (\texttt{rotten\_tomatoes.similar\_k\_sweep} / \texttt{letterboxd.similar\_k\_sweep}).
 
 \section{Application and limitations}
 \label{sec:app-limits}
 
-The website (Table~\ref{tab:funnel}: 1{,}000 catalog movies, 3{,}387 critics / 7{,}416 members) is organized in three sections, with a sort control (alphabetical, year, most-reviewed) and a \textbf{genre filter} (a dropdown built from each film's gsimonx37 genre list, \S\ref{sec:data-rt}--\ref{sec:data-lb}) over the search lists. \emph{(1) Films you have seen}: a search box adds a film to a table where each row carries a rating widget (five-star on Rotten Tomatoes, a 1--10 stepper on Letterboxd). \emph{(2) Films to predict}: the same searchable table, scoring optional; each row also has a ``movies like this one'' dropdown (\S\ref{sec:similar}) -- green if you have already rated one of its 20 nearest content neighbours, red otherwise. \emph{(3) Predictions}: for every target film the app shows all four model variants (Design 1 full, Design 1 top-$|$sim$|$, XGBoost, neural net) side by side, each with its raw and z-score prediction, plus the movie's consensus mean and (Rotten Tomatoes only) Tomatometer. When the visitor scores some target films, the app reports the mean squared error of every variant against the visitor's own score and marks the closest, answering ``which method predicts me best?''. All eight model variants (four designs $\times$ two tracks) run entirely client-side, ported from the Python training code to hand-written TypeScript (an XGBoost tree-walker, a neural-net forward pass, and the movie-facet affinity computation, verified to match Python to within numerical tie-break tolerance -- see \texttt{web/scripts/validate*.ts}).
+The website (Table~\ref{tab:funnel}: 1{,}000 catalog movies, 3{,}387 critics / 7{,}416 members) is organized in three sections, with a sort control (alphabetical, year, most-reviewed) and a \textbf{genre filter} (a dropdown built from each film's gsimonx37 genre list, \S\ref{sec:data-rt}--\ref{sec:data-lb}) over the search lists. \emph{(1) Films you have seen}: a search box adds a film to a table where each row carries a rating widget (five-star on Rotten Tomatoes, a 1--10 stepper on Letterboxd). \emph{(2) Films to predict}: the same searchable table, scoring optional; each row also has a ``movies like this one'' dropdown (\S\ref{sec:similar}) -- green if you have already rated one of its 20 nearest content neighbours, red otherwise. \emph{(3) Predictions}: for every target film the app shows all four model variants (Design 1 full, Design 1 top-$|$sim$|$, XGBoost, neural net) side by side, each with its raw and z-score prediction, plus the movie's consensus mean and (Rotten Tomatoes only) Tomatometer. When the visitor scores some target films, the app reports the mean squared error of every variant against the visitor's own score and marks the closest, answering ``which method predicts me best?''. All eight model variants (four designs $\times$ two tracks) run entirely client-side, ported from the Python training code to hand-written TypeScript (an XGBoost tree-walker, a neural-net forward pass, and the content-affinity feature computation of \S\ref{sec:features-eq}, verified to match Python to within numerical tie-break tolerance -- see \texttt{web/scripts/validate*.ts}). The theme block's sentence-transformer runs \emph{only offline}, once, over the 109 known theme phrases; the browser receives just the resulting $109\times109$ cosine-similarity matrix (a $\sim$48\,KB JSON file) and does a dot-product lookup, never transformer inference.
 
-Two secondary metrics (\texttt{comparison.analysis}, \texttt{secondary\_metrics.csv}) check that the gain is calibration rather than reordering: within-user Spearman rank correlation between predictions and held-out ratings, and precision@10. Design 1's within-user Spearman is 0.578 versus 0.580 for the reviewer mean (B3) -- ranking is barely changed, consistent with the attribution finding (Table~\ref{tab:attr}) that the win is calibration, not reordering a user's films.
+Two secondary metrics (\texttt{rotten\_tomatoes.analyze}, \texttt{secondary\_metrics.csv}) check that the gain is calibration rather than reordering: within-user Spearman rank correlation between predictions and held-out ratings, and precision@10. Design 1's within-user Spearman is 0.587 versus 0.578 for the reviewer mean (B3), and precision@10 is 0.287 versus 0.284 -- ranking is barely changed, consistent with the attribution finding (Table~\ref{tab:attr}) that the win is calibration, not reordering a user's films.
 
 Item holdout is not temporal forecasting. The gsimonx37 join is fuzzy (normalized title + year) and RT's own release-date coverage is sparse, so its match rate (69.2\% full catalog) is lower than Letterboxd's (94.3\%) -- reported honestly rather than assumed complete; unmatched films fall back to each project's own (sparser) genre parsing. The top-$|$sim$|$ analytic variant underperforms the full formula on both datasets -- a negative result, not tuned away. The magnitude multiplier is an unregularized through-origin slope. Scores are quantized to six levels on Rotten Tomatoes; pseudo-users there are professional critics rather than casual users.
 
 \subsection*{Repository layout}
 
-Each Rotten Tomatoes design lives in its own package under \texttt{src/rotten\_tomatoes/}: \texttt{design1\_analytic/} (\texttt{analytic.py} the formula, top-$k$ baseline, and the new top-$|$sim$|$ variant; \texttt{run.py} the k-sweep and paired test; \texttt{attribution.py} the formula-component decomposition; \texttt{similar\_k\_sweep.py} the neighbour-list tuning of \S\ref{sec:similar}; \texttt{predict.py} app inference), \texttt{design2\_xgboost/train.py}, \texttt{design3\_neural/} (\texttt{network.py}, \texttt{train.py}), and \texttt{comparison/analysis.py}. The pseudo-user substrate (\texttt{pseudo\_users.py}), the shared feature contract (\texttt{features.py}), and the gsimonx37 movie-facet join (\texttt{movie\_features.py}) live once at the \texttt{rotten\_tomatoes} package root and are imported by all three designs. \texttt{src/letterboxd/} mirrors this layout exactly (its own \texttt{features.py}, \texttt{movie\_features.py}, \texttt{train\_xgboost.py}, \texttt{train\_neural.py}, \texttt{analyze.py}, \texttt{web\_export.py}), sharing no code, data, or model artifacts with Rotten Tomatoes -- the gsimonx37 CSVs are the one shared external download, read independently by each project's own join. \texttt{tests/} covers the formula, the random-holdout and paired-episode protocols, partition disjointness, and the feature contract including the facet-affinity leave-target-out property.
+Both projects use one flat module layout, file-for-file: \texttt{src/rotten\_tomatoes/} holds \texttt{analytic.py} (the formula, top-$k$ baseline, and the top-$|$sim$|$ variant), \texttt{train\_analytic.py} (the k-sweep and paired test), \texttt{build\_rows.py} (the cached training pool of \S\ref{sec:protocol}), \texttt{train\_xgboost.py}, \texttt{train\_neural.py} (with \texttt{network.py}), \texttt{analyze.py} (the cross-design comparison), \texttt{plots.py} (shared RMSE-by-$n$ plotting plus each trainer's per-run scratch plot), \texttt{attribution.py}, \texttt{similar\_k\_sweep.py} (the neighbour-list tuning of \S\ref{sec:similar}), the three \texttt{predict\_*.py} app-inference modules, and \texttt{preprocess.py}/\texttt{audit.py} for ingest. The pseudo-user substrate (\texttt{pseudo\_users.py}), the shared feature contract (\texttt{features.py}), and the gsimonx37 movie-facet join (\texttt{movie\_features.py}) live once at the package root and are imported by all three designs. \texttt{src/letterboxd/} mirrors this layout module for module (its own \texttt{pseudo\_users.py}, \texttt{features.py}, \texttt{movie\_features.py}, \texttt{build\_rows.py}, \texttt{train\_xgboost.py}, \texttt{train\_neural.py}, \texttt{analyze.py}, \texttt{web\_export.py}), sharing no code, data, or model artifacts with Rotten Tomatoes -- the gsimonx37 CSVs are the one shared external download, read independently by each project's own join. \texttt{tests/} covers the formula, the random-holdout and paired-episode protocols, partition disjointness, and the feature contract for both projects (\texttt{test\_design2\_features.py}, \texttt{test\_letterboxd\_features.py}) -- the genre count's leave-target-out property, the theme kernel's weighting and masking, the actor rankings' tie-breaks and padding, and the count-is-the-mask invariant across every affinity block.
 
 \vspace{0.4em}
 \hrule
 \vspace{0.4em}
-{\small\textbf{Reproducibility.} Python, pandas, scipy.sparse, NumPy, XGBoost, PyTorch, and matplotlib. The pseudo-user substrate and feature code are shared, seeded modules (see Repository layout above), so the cross-design comparison is exact. Both projects run entirely client-side in the browser (Vite/React/TypeScript, \texttt{web/}), hosted as a static GitHub Pages site with no server. Run the ordered module pipelines listed in the README from \texttt{src/}; all random seeds are fixed.}
+{\small\textbf{Reproducibility.} Python, pandas, scipy.sparse, NumPy, scikit-learn (XGBoost is used through its scikit-learn estimator API; K-means and standardization come from scikit-learn directly), sentence-transformers (the one offline, one-time theme-embedding step -- not scikit-learn, since scikit-learn has no sentence-embedding model), PyTorch, and matplotlib. The pseudo-user substrate and feature code are shared, seeded modules (see Repository layout above), so the cross-design comparison is exact. Both projects run entirely client-side in the browser (Vite/React/TypeScript, \texttt{web/}), hosted as a static GitHub Pages site with no server. Run \texttt{make rt} and \texttt{make lb} from the repository root (each stage is also its own target, e.g.\ \texttt{make rt-xgboost}); all random seeds are fixed.}
 
 \end{document}

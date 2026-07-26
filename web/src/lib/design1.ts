@@ -7,7 +7,7 @@ function clamp(x: number, lo: number, hi: number): number {
 }
 
 /** Movie-mean-centered, magnitude-scaled analytic prediction. Mirrors
- * design1_analytic/predict.py:predict. */
+ * predict_analytic.py:predict. */
 export function predictAnalytic(
   catalog: Catalog,
   matches: Map<number, CriticMatch>,
@@ -86,7 +86,7 @@ const TOPK_ABS = 10;
  * |sim| -- both strongly aligned and strongly anti-aligned, not just
  * positively-aligned -- then the identical movie-mean-centered,
  * magnitude-scaled formula. Mirrors
- * design1_analytic/analytic.py:predict_movie_topk_abs. */
+ * analytic.py:predict_movie_topk_abs. */
 export function predictAnalyticTop10(
   catalog: Catalog,
   matches: Map<number, CriticMatch>,

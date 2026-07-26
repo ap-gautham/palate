@@ -29,7 +29,7 @@ import torch
 from rotten_tomatoes import features as F
 from rotten_tomatoes import movie_features as MF
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data" / "rotten_tomatoes" / "processed"
 MODELS = ROOT / "results" / "rotten_tomatoes" / "models"
 OUT = ROOT / "web" / "public" / "data" / "rotten_tomatoes"
@@ -46,7 +46,7 @@ def export_catalog():
     critics = pd.read_parquet(DATA / "demo_critics.parquet")
 
     movies = (scores.drop_duplicates("movie_id")
-              [["movie_id", "title", "year", "tomatoMeter", "genre_id", "tomatometer_score"]]
+              [["movie_id", "title", "year", "tomatoMeter", "tomatometer_score"]]
               .reset_index(drop=True))
     n_scores = scores.groupby("movie_id").size().rename("n_scores")
     movies = movies.join(n_scores, on="movie_id")
@@ -60,31 +60,36 @@ def export_catalog():
 
     # Rich movie facets (gsimonx37 join): the affinity sets as raw string
     # arrays (browser computes overlap by string equality, exactly like the
-    # Python frozenset intersection in features.py's _facet_tail), plus the
-    # genre/decade multi-hot ids using the SAME fixed training vocab
-    # (movie_features.GENRE_VOCAB_K/DECADE_VOCAB_K) so mh_genre_i/mh_decade_i
-    # line up with the trained models' columns.
+    # Python frozenset intersection in features.py's affinity blocks), plus
+    # the genre multi-hot ids using the SAME fixed canonical training vocab
+    # (movie_features.GENRE_VOCAB_K) so mh_genre_i lines up with the trained
+    # models' columns, and themeIds -- ids into the theme similarity matrix
+    # (theme_similarity.json) the browser's theme block needs.
     full_movies = pd.read_parquet(DATA / "movies.parquet")
     mf = F.load_project_movie_facets(full_movies)
+    theme_sim = F.load_project_theme_similarity()
 
     def facets_of(mid):
         fs = mf.facet_sets.get(mid, {})
         return {f: sorted(fs.get(f, [])) for f in MF.FACETS}
 
+    def theme_ids_of(mid):
+        strs = mf.facet_sets.get(mid, {}).get("theme", [])
+        return sorted(theme_sim.vocab[t] for t in strs if t in theme_sim.vocab)
+
     movies_json = [{
         "id": row.movie_id,
         "title": title_from_slug(row.movie_id) if pd.isna(row.title) else row.title,
         "year": clean(row.year), "tomatoMeter": clean(row.tomatoMeter),
-        "genreId": int(row.genre_id), "tomatometerScore": clean(row.tomatometer_score),
+        "tomatometerScore": clean(row.tomatometer_score),
         "nScores": int(row.n_scores),
         "facets": facets_of(row.movie_id),
         "genreMh": mf.genre_multihot.get(row.movie_id, []),
-        "decadeMh": mf.decade_multihot.get(row.movie_id, []),
+        "themeIds": theme_ids_of(row.movie_id),
         "runtimeLog": clean(mf.runtime_log.get(row.movie_id)),
         "gsRating": clean(mf.gs_rating.get(row.movie_id)),
         "nThemesLog": float(np.log1p(mf.n_themes.get(row.movie_id, 0))),
         "nLanguagesLog": float(np.log1p(mf.n_languages.get(row.movie_id, 0))),
-        "nCountriesLog": float(np.log1p(mf.n_countries.get(row.movie_id, 0))),
     } for row in movies.itertuples()]
 
     def clean_sigma(v):
@@ -101,6 +106,13 @@ def export_catalog():
 
     (OUT / "movies.json").write_text(dumps(movies_json))
     (OUT / "critics.json").write_text(dumps(critics_json))
+
+    # Theme embedding similarity matrix (see movie_features.build_theme_similarity):
+    # sorted vocab + the dense cosine matrix, so the browser's theme block does
+    # a dot-product lookup instead of running a transformer client-side.
+    themes_sorted = sorted(theme_sim.vocab, key=lambda t: theme_sim.vocab[t])
+    (OUT / "theme_similarity.json").write_text(dumps({
+        "themes": themes_sorted, "matrix": theme_sim.matrix.tolist()}))
 
     # "Movies like this one" suggestions for the app's predict-row dropdown
     # (K-means on content facets; see movie_features.top_similar). Consensus
@@ -119,7 +131,12 @@ def export_catalog():
 
     k_star_path = ROOT / "results" / "rotten_tomatoes" / "tables" / "k_star.json"
     k_shrink = json.loads(k_star_path.read_text())["k_star"] if k_star_path.exists() else 8
-    (OUT / "k_shrink.json").write_text(dumps({"kShrink": k_shrink}))
+    # sigma_u fallback for the affinity blocks' z-scores (see features.py's
+    # _facet_tail) when a user's own seen-set std is ~0. Computed from this
+    # same shipped ratings table so Python app-time, the browser, and this
+    # export all agree on the identical constant.
+    global_std = float(scores["score_std"].std())
+    (OUT / "k_shrink.json").write_text(dumps({"kShrink": k_shrink, "globalStd": global_std}))
 
     print(f"catalog: {len(movies_json)} movies, {len(critics_json)} critics, "
           f"{len(score)} ratings, k_shrink={k_shrink}")
@@ -153,7 +170,7 @@ def export_xgboost(model_name="design2_xgboost.json", meta_name="design2_xgboost
 
 LAYER_ORDER = (
     ["input_norm.weight", "input_norm.bias", "input_norm.running_mean", "input_norm.running_var",
-     "embedding.weight", "proj.weight", "proj.bias"]
+     "proj.weight", "proj.bias"]
     + [f"blocks.{i}.net.{layer}.{field}"
        for i in range(6)
        for layer, field in [
@@ -193,12 +210,9 @@ def export_neural_net(model_name="design3_mlp.pt", weights_prefix="nn_weights_me
     meta = {
         "numericCols": ckpt["numeric_cols"],
         "logCols": ckpt["log_cols"],
-        "genreCol": ckpt["genre_col"],
         "muImpute": ckpt["mu_impute"].tolist(),
         "mu": ckpt["mu"].tolist(),
         "sd": ckpt["sd"].tolist(),
-        "nGenres": int(ckpt["n_genres"]),
-        "embDim": int(ckpt["emb_dim"]),
         "width": int(ckpt["width"]),
         "depth": int(ckpt["depth"]),
         "ensembleSize": len(ckpt["state_dicts"]),
