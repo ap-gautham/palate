@@ -314,7 +314,6 @@ export function PredictApp({ data }: { data: AppData }) {
                     <th>Critic</th>
                     <th>Publication</th>
                     <th>Alignment</th>
-                    <th>Scale match</th>
                     <th>Films in common</th>
                   </tr>
                 </thead>
@@ -324,7 +323,6 @@ export function PredictApp({ data }: { data: AppData }) {
                       <td>{m.criticId}</td>
                       <td>{m.publicationName}</td>
                       <td>{m.sim.toFixed(2)}</td>
-                      <td>{m.magSim.toFixed(2)}</td>
                       <td>{m.overlap}</td>
                     </tr>
                   ))}

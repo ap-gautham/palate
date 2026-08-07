@@ -320,7 +320,6 @@ export function LetterboxdApp({ data }: { data: LetterboxdData }) {
                   <tr>
                     <th>Member</th>
                     <th>Alignment</th>
-                    <th>Scale match</th>
                     <th>Films in common</th>
                   </tr>
                 </thead>
@@ -329,7 +328,6 @@ export function LetterboxdApp({ data }: { data: LetterboxdData }) {
                     <tr key={m.memberId}>
                       <td>{m.memberId}</td>
                       <td>{m.sim.toFixed(2)}</td>
-                      <td>{m.magSim.toFixed(2)}</td>
                       <td>{m.overlap}</td>
                     </tr>
                   ))}
