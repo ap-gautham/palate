@@ -17,8 +17,6 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-import json
-
 from rotten_tomatoes.config import FIGURES, TABLES, VALUE_COL
 
 
@@ -26,23 +24,20 @@ def rmse(err):
     return float(np.sqrt(np.mean(np.square(err))))
 
 # Human-readable name of the value being predicted/scored.
-VALUE_NAME = "raw score (0–5)" if VALUE_COL == "score_std" else "z"
-_meta_path = TABLES / "value_meta.json"
-GLOBAL_MEAN = (json.loads(_meta_path.read_text())["global_mean"]
-               if _meta_path.exists() else 0.0)
+VALUE_NAME = "ratings (0–5)" if VALUE_COL == "score_std" else "z"
 
 # dataviz reference palette (validated, light mode)
 C = {"design1": "#2a78d6", "design1_topk": "#7a4fd6", "design2": "#008300", "design3": "#4a3aa7",
-     "tomatometer_z": "#eb6834", "critic_mean": "#eda100",
+     "tomatometer_z": "#eb6834", "critic_mean": "#8a8984",
      "topk_similar_mean": "#1baf7a", "zero": "#e87ba4"}
-LABEL = {"design1": "Design 1 · movie mean + magnitude",
-         "design1_topk": "Design 1 · top-|sim| (k=10)",
-         "design2": "Design 2 · XGBoost",
-         "design3": "Design 3 · neural net",
-         "tomatometer_z": "B2 · Tomatometer → score*",
-         "critic_mean": "B3 · mean of all reviewers",
-         "topk_similar_mean": "B4 · mean of top-10 similar",
-         "zero": "B1 · global mean score"}
+LABEL = {"design1": "Similarity model (analytic)",
+         "design1_topk": "Similarity model · top-|sim| (k=10)",
+         "design2": "XGBoost",
+         "design3": "Neural network",
+         "tomatometer_z": "Baseline: Tomatometer → score*",
+         "critic_mean": "Baseline: mean of all reviewers",
+         "topk_similar_mean": "Baseline: mean of top-10 similar",
+         "zero": "Baseline: global mean score"}
 SURFACE = "#fcfcfb"
 N_ORDER = [3, 5, 10, 20, 50, -1]
 N_TICK = ["3", "5", "10", "20", "50", "all"]
@@ -74,18 +69,24 @@ def load():
 
 
 def plot_a(rec, d2, d3):
+    """Clean headline figure: the consensus baseline (dashed) plus the three
+    models, nothing else -- the other baselines and the top-|sim| variant live
+    in the tables."""
     pop = rec[rec["sampling"] == "pop"]
     fig, ax = plt.subplots(figsize=(8.5, 5.2), dpi=180)
     fig.patch.set_facecolor(SURFACE)
     xs = np.arange(len(N_ORDER))
     curves = {}
-    for m in ["zero", "tomatometer_z", "critic_mean", "topk_similar_mean", "design1", "design1_topk"]:
-        pop2 = pop.copy(); pop2["zero"] = GLOBAL_MEAN
-        mean, sd = [], []
-        for n in N_ORDER:
-            pd_r = per_draw_rmse(pop2[pop2["n"] == n], m)
-            mean.append(pd_r.mean()); sd.append(pd_r.std(ddof=0))
-        curves[m] = (np.array(mean), np.array(sd))
+    mean, sd = [], []
+    for n in N_ORDER:
+        pd_r = per_draw_rmse(pop[pop["n"] == n], "critic_mean")
+        mean.append(pd_r.mean()); sd.append(pd_r.std(ddof=0))
+    curves["critic_mean"] = (np.array(mean), np.array(sd))
+    mean, sd = [], []
+    for n in N_ORDER:
+        pd_r = per_draw_rmse(pop[pop["n"] == n], "design1")
+        mean.append(pd_r.mean()); sd.append(pd_r.std(ddof=0))
+    curves["design1"] = (np.array(mean), np.array(sd))
     for key, frame, col in [("design2", d2, "pred_main"), ("design3", d3, "pred_nn")]:
         if frame is None:
             continue
@@ -94,34 +95,25 @@ def plot_a(rec, d2, d3):
             pd_r = per_draw_rmse(frame[frame["n"] == n], col)
             mean.append(pd_r.mean()); sd.append(pd_r.std(ddof=0))
         curves[key] = (np.array(mean), np.array(sd))
-    offsets = {"design1": 14, "design1_topk": 20, "design2": -14, "design3": 3,
-               "topk_similar_mean": 8}
-    for m in [k for k in ["zero", "tomatometer_z", "critic_mean",
-                          "topk_similar_mean", "design1", "design1_topk", "design2", "design3"]
-              if k in curves]:
+    for m in [k for k in ["critic_mean", "design1", "design2", "design3"] if k in curves]:
         mean, sd = curves[m]
-        flat = m in ("zero", "tomatometer_z", "critic_mean")
+        flat = m == "critic_mean"
         ax.plot(xs, mean, color=C[m], linewidth=2,
                 linestyle="--" if flat else "-",
                 marker="" if flat else "o", markersize=4.5, label=LABEL[m])
         if not flat:
             ax.fill_between(xs, mean - sd, mean + sd, color=C[m], alpha=0.15,
                             linewidth=0)
-        if m in offsets:  # direct-label solid series only; dashed flats live in the legend
-            ax.annotate(LABEL[m].split("·")[0].strip(), (xs[-1], mean[-1]),
-                        xytext=(8, offsets[m]), textcoords="offset points",
-                        fontsize=8.5, color=C[m], va="center")
-    ax.set_ylim(top=max(c[0].max() for c in curves.values()) * 1.09)
     ax.set_xticks(xs, N_TICK)
-    ax.set_xlim(-0.3, len(xs) + 1.1)
-    ax.set_xlabel("n = seen ratings sampled for each fake profile", fontsize=10,
+    ax.set_xlim(-0.3, len(xs) - 0.7)
+    ax.set_xlabel("n = ratings the user has already given", fontsize=10,
                   color="#0b0b0b")
-    ax.set_ylabel(f"RMSE on random held-out {VALUE_NAME}", fontsize=10,
+    ax.set_ylabel(f"RMSE on held-out {VALUE_NAME}", fontsize=10,
                   color="#0b0b0b")
-    ax.set_title("Prediction quality as sampled seen history grows",
+    ax.set_title("Prediction error falls as a user rates more films",
                  fontsize=12, color="#0b0b0b", loc="left", pad=12)
     style_ax(ax)
-    ax.legend(loc="upper right", fontsize=8, frameon=False)
+    ax.legend(loc="upper right", fontsize=9, frameon=False)
     fig.tight_layout()
     fig.savefig(FIGURES / "plotA_rmse_vs_n.png", facecolor=SURFACE)
     plt.close(fig)
@@ -254,8 +246,6 @@ def plot_c(rec, d2, d3):
     fig.patch.set_facecolor(SURFACE)
     xs = np.arange(len(N_ORDER))
     series = [("design1", pop, "design1", "design1_z")]
-    if "design1_topk_z" in pop.columns:
-        series.append(("design1_topk", pop, "design1_topk", "design1_topk_z"))
     if d2 is not None and "pred_main_z" in d2.columns:
         series.append(("design2", d2, "pred_main", "pred_main_z"))
     if d3 is not None and "pred_nn_z" in d3.columns:
@@ -278,9 +268,9 @@ def plot_c(rec, d2, d3):
         plt.close(fig)
         return
     ax.set_xticks(xs, N_TICK)
-    ax.set_xlim(-0.3, len(xs) + 1.1)
-    ax.set_xlabel("n = seen ratings sampled for each fake profile", fontsize=10, color="#0b0b0b")
-    ax.set_ylabel(f"RMSE on random held-out {VALUE_NAME}", fontsize=10, color="#0b0b0b")
+    ax.set_xlim(-0.3, len(xs) - 0.7)
+    ax.set_xlabel("n = ratings the user has already given", fontsize=10, color="#0b0b0b")
+    ax.set_ylabel(f"RMSE on held-out {VALUE_NAME}", fontsize=10, color="#0b0b0b")
     ax.set_title("Isolating scale: raw track vs. z-score track\n"
                  "(z-space predictions converted back to the raw scale)",
                  fontsize=12, color="#0b0b0b", loc="left", pad=12)

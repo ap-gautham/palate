@@ -28,7 +28,7 @@
 \vspace{-0.6cm}
 
 \begin{abstract}
-Two fully parallel projects predict a person's rating of a film from other raters: critic pseudo-users on Rotten Tomatoes (301 test critics, 43{,}344 paired episodes) and real members on Letterboxd (300 test members, 41{,}058 paired episodes). Raters are partitioned 70/15/15 into train/validation/test first, and pseudo-profiles are then amplified within each partition into one cached, seeded training pool per project (\S\ref{sec:protocol}), so no test rater's ratings ever reach training. Three designs compete on identical held-out episodes in each project: an analytic movie-mean-centered formula (with a second variant restricted to the 10 most-aligned-or-anti-aligned peers), an XGBoost regressor, and a residual neural-network ensemble -- all sharing one engineered feature contract that includes, beyond similarity and consensus, real content-based affinity features joined from the gsimonx37/letterboxd Kaggle metadata dump: a user-relative z-scored affinity per genre, a sentence-embedding theme-similarity estimate, per-actor affinity (by rating and by viewing count) with cast-overlap statistics, and per-director affinity (\S\ref{sec:features-eq}). On Rotten Tomatoes, full-history RMSE is 0.801 (Design 1), 0.783 (XGBoost), 0.789 (neural net), all beating the 0.843--0.853 flat baselines. On Letterboxd, full-history RMSE is 1.502, 1.417, 1.418 against a 1.654 flat baseline. Every design also trains a parallel z-score track (each rater standardized to their own scale, predicting pure deviation, converted back before scoring) to test whether the gain is calibration or taste-matching; the result is not uniform across datasets or designs, reported as found (\S\ref{sec:results}).
+Two fully parallel projects predict a person's rating of a film from other raters: critic pseudo-users on Rotten Tomatoes (301 test critics, 43{,}344 paired episodes) and real members on Letterboxd (300 test members, 41{,}058 paired episodes). Raters are partitioned 70/15/15 into train/validation/test first, and pseudo-profiles are then amplified within each partition into one cached, seeded training pool per project (\S\ref{sec:protocol}), so no test rater's ratings ever reach training. Three designs compete on identical held-out episodes in each project: an analytic movie-mean-centered formula (with a second variant restricted to the 10 most-aligned-or-anti-aligned peers), an XGBoost regressor, and a residual neural-network ensemble -- all sharing one engineered feature contract that includes, beyond similarity and consensus, real content-based affinity features joined from the gsimonx37/letterboxd Kaggle metadata dump: a user-relative z-scored affinity per genre, a sentence-embedding theme-similarity estimate, per-actor affinity (by rating and by viewing count) with cast-overlap statistics, and per-director affinity (\S\ref{sec:features-eq}). On Rotten Tomatoes, full-history RMSE is 0.801 (Design 1), 0.783 (XGBoost), 0.789 (neural net), all beating the 0.843--0.853 flat baselines -- the best model is \textbf{7.1\% more accurate} than simply quoting each film's mean reviewer score. On Letterboxd, full-history RMSE is 1.502, 1.417, 1.418 against a 1.654 flat baseline -- a \textbf{14.3\%} improvement for the best model. Every design also trains a parallel z-score track (each rater standardized to their own scale, predicting pure deviation, converted back before scoring) to test whether the gain is calibration or taste-matching; the result is not uniform across datasets or designs, reported as found (\S\ref{sec:results}).
 \end{abstract}
 
 \section{Data}
@@ -257,11 +257,11 @@ Design 3 neural net & 0.831 & 0.823 & 0.815 & 0.805 & 0.794 & \textbf{0.789} \\
 \begin{figure}[h]
 \centering
 \includegraphics[width=0.92\textwidth]{plotA_rmse_vs_n.png}
-\caption{Error versus sampled seen history (Rotten Tomatoes). Both trained models beat every baseline at every seen-count.}
+\caption{Error versus sampled seen history (Rotten Tomatoes): the three models against the flat consensus baseline B3 (mean of all reviewers); shaded bands are $\pm$1 s.d.\ across the three seen-order redraws. The remaining baselines and the top-$|$sim$|$ variant are in Table~\ref{tab:nsweep}.}
 \label{fig:plotA}
 \end{figure}
 
-Design 1 improves over B3 by 5.0\% at full history; the trained models win everywhere: XGBoost overall/full-history RMSE 0.807/0.783, the neural net 0.809/0.789. The top-$|$sim$|$ variant of Design 1 trails the full-neighbourhood formula slightly at every seen-count (0.811 vs.\ 0.801 full-history) -- restricting to 10 alignment-selected peers discards useful information the full weighted sum still captures, an honest negative result for that variant. Across low/mid/high critic-disagreement terciles, full-history gain over B2 is $+8.3/+7.5/+3.9\%$ for Design 1, $+10.2/+8.2/+7.3\%$ for XGBoost, $+11.2/+7.4/+5.6\%$ for the neural net.
+Against B3 -- simply quoting each film's mean reviewer score -- the models are markedly more accurate once a real profile exists: at full history, Design 1 cuts RMSE by \textbf{5.0\%} (0.801 vs.\ 0.843), XGBoost by \textbf{7.1\%} (0.783), and the neural net by \textbf{6.3\%} (0.789). The trained models win everywhere: XGBoost overall/full-history RMSE 0.807/0.783, the neural net 0.809/0.789. The top-$|$sim$|$ variant of Design 1 trails the full-neighbourhood formula slightly at every seen-count (0.811 vs.\ 0.801 full-history) -- restricting to 10 alignment-selected peers discards useful information the full weighted sum still captures, an honest negative result for that variant. Across low/mid/high critic-disagreement terciles, full-history gain over B2 is $+8.3/+7.5/+3.9\%$ for Design 1, $+10.2/+8.2/+7.3\%$ for XGBoost, $+11.2/+7.4/+5.6\%$ for the neural net.
 
 \begin{table}[h]
 \centering
@@ -317,11 +317,11 @@ Design 3 neural net & 1.610 & 1.579 & 1.541 & 1.518 & 1.494 & \textbf{1.418} \\
 \begin{figure}[h]
 \centering
 \includegraphics[width=0.92\textwidth]{../results/letterboxd/figures/plotA_rmse_vs_n.png}
-\caption{Letterboxd: error versus sampled seen history, styled identically to Figure~\ref{fig:plotA}.}
+\caption{Letterboxd: error versus sampled seen history, styled identically to Figure~\ref{fig:plotA} -- the three models against the flat consensus baseline (mean of all members).}
 \label{fig:lb-plotA}
 \end{figure}
 
-Design 1's top-$|$sim$|$ variant lands in a statistical dead heat with the full formula at full history here (1.501 vs.\ 1.502) while trailing it at every finite seen-count -- a more favourable showing than on Rotten Tomatoes, where the full formula stays ahead throughout, but still no positive case for restricting the neighbourhood. The trained models are effectively tied for best full-history method on Letterboxd (XGBoost 1.417, neural net 1.418), consistent with \S\ref{sec:design2-imp}'s finding that beyond calibration and consensus the two very different model families extract the same information from this feature contract.
+The improvement over the flat baseline is larger here than on Rotten Tomatoes: at full history, Design 1 cuts RMSE by \textbf{9.2\%} against B3 (1.502 vs.\ 1.654), XGBoost by \textbf{14.3\%} (1.417), and the neural net by \textbf{14.2\%} (1.418). Design 1's top-$|$sim$|$ variant lands in a statistical dead heat with the full formula at full history here (1.501 vs.\ 1.502) while trailing it at every finite seen-count -- a more favourable showing than on Rotten Tomatoes, where the full formula stays ahead throughout, but still no positive case for restricting the neighbourhood. The trained models are effectively tied for best full-history method on Letterboxd (XGBoost 1.417, neural net 1.418), consistent with \S\ref{sec:design2-imp}'s finding that beyond calibration and consensus the two very different model families extract the same information from this feature contract.
 
 \textbf{Honest cross-dataset finding.} Normalizing by rating range (RMSE~/~(max$-$min)) puts the two 0--5 and 1--10 scales on the same footing. Rotten Tomatoes' normalized RMSE is 0.160/0.162/0.157/0.158 (Design 1 full / Design 1 top-$|$sim$|$ / XGBoost / neural net); Letterboxd's is 0.167/0.167/0.157/0.158. The trained models land at essentially \emph{identical} normalized error on both datasets, and the analytic formula normalizes marginally better on Rotten Tomatoes despite its far sparser critic pseudo-user profiles -- Letterboxd's dense real member histories did not translate into a lower normalized error anywhere, even with the content-affinity features (\S\ref{sec:features-eq}) available to both. Full numbers are in \texttt{results/letterboxd/cross\_dataset\_comparison.csv}.
 
@@ -354,7 +354,7 @@ Design 3 neural net & 1.418 & 1.406 & $-$0.013 \\
 \begin{figure}[h]
 \centering
 \includegraphics[width=0.92\textwidth]{plotC_raw_vs_z.png}
-\caption{Rotten Tomatoes: raw (solid) vs.\ z-score (dashed) RMSE by seen count, per design.}
+\caption{Rotten Tomatoes: raw (solid) vs.\ z-score (dashed) RMSE by seen count for the three models; the top-$|$sim$|$ variant's z-track is in Table~\ref{tab:rawvsz}.}
 \label{fig:plotC}
 \end{figure}
 

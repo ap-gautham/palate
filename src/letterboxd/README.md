@@ -99,25 +99,31 @@ Full-history RMSE (1–10 scale), from `results/letterboxd/nsweep_summary.csv`:
 
 | method | 3 | 5 | 10 | 20 | 50 | all |
 |---|---:|---:|---:|---:|---:|---:|
-| B1 global mean | 2.108 | 2.108 | 2.108 | 2.108 | 2.108 | 2.108 |
-| B3 mean of all members | 1.639 | 1.639 | 1.639 | 1.639 | 1.639 | 1.639 |
-| B4 mean of top-10 similar | 1.705 | 1.686 | 1.670 | 1.653 | 1.657 | 1.622 |
-| Design 1 analytic (full) | 1.765 | 1.670 | 1.597 | 1.561 | 1.545 | **1.507** |
-| Design 1 analytic (top-\|sim\|) | 1.836 | 1.738 | 1.649 | 1.592 | 1.573 | 1.526 |
-| Design 2 XGBoost | 1.626 | 1.595 | 1.566 | 1.535 | 1.503 | **1.455** |
-| Design 3 neural net | 1.642 | 1.610 | 1.581 | 1.538 | 1.515 | **1.468** |
+| B1 global mean | 2.104 | 2.104 | 2.104 | 2.104 | 2.104 | 2.104 |
+| B3 mean of all members | 1.654 | 1.654 | 1.654 | 1.654 | 1.654 | 1.654 |
+| B4 mean of top-10 similar | 1.710 | 1.716 | 1.680 | 1.671 | 1.654 | 1.614 |
+| Design 1 analytic (full) | 1.715 | 1.648 | 1.575 | 1.545 | 1.527 | **1.502** |
+| Design 1 analytic (top-\|sim\|) | 1.806 | 1.723 | 1.633 | 1.591 | 1.553 | 1.501 |
+| Design 2 XGBoost | 1.611 | 1.586 | 1.548 | 1.521 | 1.480 | **1.417** |
+| Design 3 neural net | 1.610 | 1.579 | 1.541 | 1.518 | 1.494 | **1.418** |
 
-The top-|sim| variant trails the full-neighbourhood formula at every
-seen-count (1.526 vs. 1.507 full-history) — the same honest negative result
-as on Rotten Tomatoes. **This is not directly comparable to RT's RMSE** —
-Letterboxd's target is 1–10, RT's is 0–5, and the two use different (though
-structurally parallel) evaluation populations. Normalizing by rating range
+Against B3 (quoting each film's mean member rating), the best model cuts
+full-history RMSE by **14.3%** (1.417 vs. 1.654); the analytic formula by
+9.2%. The top-|sim| variant trails the full-neighbourhood formula at every
+finite seen-count, reaching only a statistical dead heat at full history
+(1.501 vs. 1.502) — still no positive case for restricting the neighbourhood,
+the same honest negative result as on Rotten Tomatoes. **This is not directly
+comparable to RT's RMSE** — Letterboxd's target is 1–10, RT's is 0–5, and the
+two use different (though structurally parallel) evaluation populations.
+Normalizing by rating range
 (`results/letterboxd/cross_dataset_comparison.csv`) puts them on the same
-footing: RT's normalized RMSE is ~0.154–0.162, Letterboxd's is ~0.162–0.170.
-The two are **comparable**, with RT marginally *better* normalized despite its
-sparser critic pseudo-user profiles — an honest result, not a confirmation
-that more (real) rating data produces a lower normalized error here, even with
-the richer movie-facet features added to both.
+footing: RT's normalized RMSE is ~0.157–0.162, Letterboxd's is ~0.157–0.167.
+The two are **comparable**: the trained models land at essentially identical
+normalized error on both, and the analytic formula normalizes marginally
+*better* on RT despite its sparser critic pseudo-user profiles — an honest
+result, not a confirmation that more (real) rating data produces a lower
+normalized error here, even with the richer movie-facet features added to
+both.
 
 ## Isolating scale: the z-score track
 
@@ -128,10 +134,10 @@ and the prediction is converted back to the raw 1–10 scale before scoring
 
 | design | raw | z | z − raw |
 |---|---:|---:|---:|
-| Design 1 analytic (full) | 1.507 | 1.640 | +0.134 |
-| Design 1 analytic (top-\|sim\|) | 1.526 | 1.528 | +0.001 |
-| Design 2 XGBoost | 1.455 | 1.455 | +0.0004 |
-| Design 3 neural net | 1.468 | 1.464 | −0.004 |
+| Design 1 analytic (full) | 1.502 | 1.607 | +0.105 |
+| Design 1 analytic (top-\|sim\|) | 1.501 | 1.501 | −0.001 |
+| Design 2 XGBoost | 1.417 | 1.412 | −0.005 |
+| Design 3 neural net | 1.418 | 1.406 | −0.013 |
 
 Unlike RT (where the z-track trails raw at every design), Letterboxd's trained
 models (Design 2/3) come out **flat-to-slightly-better** in z-space at full
@@ -156,14 +162,14 @@ Tomatometer) — identical method to Rotten Tomatoes'.
 6,000 held-out (member, n=10 seen, target) episodes were bucketed by how many
 of the target's k nearest neighbours were already in the seen set, for
 `k_neighbors` ∈ {10, 20, 30} — the same 6,000 Design-1 predictions are reused
-for every k, so only the bucketing differs. Unlike Rotten Tomatoes' clean
-RMSE decline as similar-seen count rises, Letterboxd's sweep is noisier and
-does not cleanly discriminate among the three values at this sample size
-(the mechanical "lowest RMSE at ≥3 similar seen" rule picks `k=10` at 0.622,
-but that bucket has only 6 episodes — not a result to trust). Reported
-honestly: `k_neighbors=20` was set for *both* projects, since Rotten
-Tomatoes' larger, more reliable sample supports it outright and Letterboxd's
-own data doesn't contradict it strongly enough to justify a different value.
+for every k, so only the bucketing differs. Neither dataset shows a clean
+beneficial signal: RMSE is flat within noise up to 2 similar films seen, then
+rises on buckets thin enough (a handful of episodes) to be unreliable —
+rating a target's nearest content neighbours first did not measurably sharpen
+its prediction in this sample, on either dataset. Reported honestly as a
+negative result: `k_neighbors=20` is kept on *both* projects as a UI choice
+(how many suggestions to show), independent of this null predictive-value
+finding.
 Full numbers: `results/letterboxd/similar_k_sweep.csv`,
 `figures/plotD_similar_k_sweep.png`.
 

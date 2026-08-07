@@ -1,18 +1,11 @@
+/* Dark theme is the site default (not tied to the OS setting). */
 :root {
-  --bg: #fbfbf9; --surface: #ffffff; --ink: #141413; --muted: #5c5b57;
-  --line: #e7e5df; --accent: #2a78d6; --good: #008300; --violet: #4a3aa7;
-  --warm: #eb6834; --gold: #e8ab20; --code: #f2f1ec; --danger: #c0392b;
-  --sentiment-much-more: #0b6b1f; --sentiment-more: #4caf50;
-  --sentiment-less: #c99a12; --sentiment-much-less: #c0392b;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #131312; --surface: #1c1c1a; --ink: #f2f1ec; --muted: #a8a69d;
-    --line: #2e2d2a; --accent: #5b9be6; --good: #3aa84a; --violet: #9085e9;
-    --warm: #f08a5f; --gold: #f2b943; --code: #232320; --danger: #e0685a;
-    --sentiment-much-more: #3fbf5a; --sentiment-more: #7fd68a;
-    --sentiment-less: #f2c94c; --sentiment-much-less: #e0685a;
-  }
+  color-scheme: dark;
+  --bg: #131312; --surface: #1c1c1a; --ink: #f2f1ec; --muted: #a8a69d;
+  --line: #2e2d2a; --accent: #5b9be6; --good: #3aa84a; --violet: #9085e9;
+  --warm: #f08a5f; --gold: #f2b943; --code: #232320; --danger: #e0685a;
+  --sentiment-much-more: #3fbf5a; --sentiment-more: #7fd68a;
+  --sentiment-less: #f2c94c; --sentiment-much-less: #e0685a;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }

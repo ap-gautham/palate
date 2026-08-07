@@ -42,15 +42,18 @@ TOPK_ABS = 10   # Design 1 top-|sim| variant: the k largest-|sim| peers, +/-
 
 # dataviz palette (matches the RT figures)
 C = {"design1": "#2a78d6", "design1_topk": "#7a4fd6", "design2": "#008300", "design3": "#4a3aa7",
-     "critic_mean": "#eda100", "topk_similar_mean": "#1baf7a", "zero": "#e87ba4"}
-LABEL = {"design1": "Design 1 · member mean + magnitude",
-         "design1_topk": "Design 1 · top-|sim| (k=10)",
-         "design2": "Design 2 · XGBoost",
-         "design3": "Design 3 · neural net",
-         "critic_mean": "B3 · mean of all members",
-         "topk_similar_mean": "B4 · mean of top-10 similar",
-         "zero": "B1 · global mean score"}
+     "critic_mean": "#8a8984", "topk_similar_mean": "#1baf7a", "zero": "#e87ba4"}
+LABEL = {"design1": "Similarity model (analytic)",
+         "design1_topk": "Similarity model · top-|sim| (k=10)",
+         "design2": "XGBoost",
+         "design3": "Neural network",
+         "critic_mean": "Baseline: mean of all members",
+         "topk_similar_mean": "Baseline: mean of top-10 similar",
+         "zero": "Baseline: global mean score"}
 FLAT = {"zero", "critic_mean"}
+# The headline figure keeps only the consensus baseline and the three models;
+# the other baselines and the top-|sim| variant live in the tables.
+PLOT_A_METHODS = ["critic_mean", "design1", "design2", "design3"]
 SURFACE = "#fcfcfb"
 
 
@@ -233,6 +236,7 @@ def sweep_table(rec: pd.DataFrame, methods) -> pd.DataFrame:
 
 # ---- figures ---------------------------------------------------------------
 def plot_a(rec, methods):
+    methods = [m for m in PLOT_A_METHODS if m in methods]
     fig, ax = plt.subplots(figsize=(8.5, 5.2), dpi=180)
     fig.patch.set_facecolor(SURFACE)
     xs = np.arange(len(N_ORDER))
@@ -251,15 +255,14 @@ def plot_a(rec, methods):
                 marker="" if flat else "o", markersize=4.5, label=LABEL[m])
         if not flat:
             ax.fill_between(xs, mean - sd, mean + sd, color=C[m], alpha=0.15, linewidth=0)
-    ax.set_ylim(top=max(np.nanmax(c[0]) for c in curves.values()) * 1.09)
     ax.set_xticks(xs, N_TICK)
-    ax.set_xlim(-0.3, len(xs) - 0.4)
-    ax.set_xlabel("n = seen ratings sampled for each member profile", fontsize=10, color="#0b0b0b")
-    ax.set_ylabel("RMSE on random held-out rating (1–10)", fontsize=10, color="#0b0b0b")
-    ax.set_title("Letterboxd: prediction quality as seen history grows",
+    ax.set_xlim(-0.3, len(xs) - 0.7)
+    ax.set_xlabel("n = ratings the member has already given", fontsize=10, color="#0b0b0b")
+    ax.set_ylabel("RMSE on held-out ratings (1–10)", fontsize=10, color="#0b0b0b")
+    ax.set_title("Letterboxd: prediction error falls as a member rates more films",
                  fontsize=12, color="#0b0b0b", loc="left", pad=12)
     style_ax(ax)
-    ax.legend(loc="upper right", fontsize=8, frameon=False)
+    ax.legend(loc="upper right", fontsize=9, frameon=False)
     fig.tight_layout()
     FIGURES.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIGURES / "plotA_rmse_vs_n.png", facecolor=SURFACE)
@@ -269,7 +272,7 @@ def plot_a(rec, methods):
 def plot_c(rec, methods):
     """Overlay each design's raw track (solid) against its z-score track
     (dashed, converted back to the raw scale) across seen-history n."""
-    z_pairs = [("design1", "design1_z"), ("design1_topk", "design1_topk_z"),
+    z_pairs = [("design1", "design1_z"),
               ("design2", "design2_z"), ("design3", "design3_z")]
     z_pairs = [(raw, z) for raw, z in z_pairs if raw in methods and z in rec.columns
               and rec[z].notna().any()]
@@ -289,9 +292,9 @@ def plot_c(rec, methods):
         ax.plot(xs, z_mean, color=C[raw_key], linewidth=2, linestyle="--", marker="s",
                 markersize=4, alpha=0.75, label=f"{LABEL[raw_key]} (z, converted back)")
     ax.set_xticks(xs, N_TICK)
-    ax.set_xlim(-0.3, len(xs) - 0.4)
-    ax.set_xlabel("n = seen ratings sampled for each member profile", fontsize=10, color="#0b0b0b")
-    ax.set_ylabel("RMSE on random held-out rating (1–10)", fontsize=10, color="#0b0b0b")
+    ax.set_xlim(-0.3, len(xs) - 0.7)
+    ax.set_xlabel("n = ratings the member has already given", fontsize=10, color="#0b0b0b")
+    ax.set_ylabel("RMSE on held-out ratings (1–10)", fontsize=10, color="#0b0b0b")
     ax.set_title("Letterboxd: raw track vs. z-score track\n"
                  "(z-space predictions converted back to the raw scale)",
                  fontsize=12, color="#0b0b0b", loc="left", pad=12)
